@@ -6,7 +6,7 @@
 
 | | |
 | --- | --- |
-| Version | 1.0.0 |
+| Version | 1.1.0 |
 | Author | jsg |
 | Compatible with | Zotero 7.x – 10.* |
 | License | MIT |
@@ -32,12 +32,15 @@ For each visible annotation that has a comment (or a note / a temporarily pinned
 | Overflow | When a column is full, Memory keeps the cards that fit and offers a control to expand the rest |
 | Low zoom | Below 80% zoom, non-editing cards collapse to a single line |
 
-### Editing
-
-Click a card preview to edit its comment in place.
+### Reading and editing
 
 | | |
 | --- | --- |
+| Short comments | The card grows with the text |
+| Long comments | Height caps at about nine lines; scroll inside the card |
+| Scrollbar | Thin bar in the annotation color; dim when idle, bright while scrolling |
+| Click | Opens in-place editing |
+| Drag | Selects text to copy (Ctrl/Cmd+C) |
 | Autosave | About 700 ms after you stop typing |
 | Save now | Ctrl/Cmd+Enter |
 | Cancel | Esc restores the last saved text |
@@ -45,7 +48,7 @@ Click a card preview to edit its comment in place.
 
 Supported formatting: bold, italic, underline, strikethrough, superscript, subscript, font sizes 11 / 13 / 15 / 18, bulleted list, and clear formatting. There are no color tools; the card border already shows the annotation color.
 
-Shortcut keys while editing: Ctrl/Cmd+B / I / U for bold, italic, and underline; Ctrl/Cmd+A selects the whole comment.
+Shortcut keys while editing: Ctrl/Cmd+B / I / U for bold, italic, and underline; Ctrl/Cmd+A selects the whole comment. In the preview, Ctrl/Cmd+A selects the card text and Ctrl/Cmd+C copies the selection.
 
 ### Reader integration
 
@@ -55,6 +58,7 @@ Shortcut keys while editing: Ctrl/Cmd+B / I / U for bold, italic, and underline;
 | Context menu | Show selected annotations as margin cards |
 | Hover | Hovering a card highlights the matching annotation on the page |
 | Selection | Selecting an annotation highlights its card |
+| Native popup | Hidden when that annotation already has a margin card; annotations without a card still use Zotero’s popup |
 | Preferences | Choose which annotation types appear, and optionally draw smaller note icons |
 
 Comments are stored in Zotero’s usual annotation comment field, so they stay with the item when Memory is disabled or removed.

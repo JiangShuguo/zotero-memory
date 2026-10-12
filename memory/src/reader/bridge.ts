@@ -15,6 +15,9 @@ type AnyRecord = Record<string, any>;
 
 const READY_TIMEOUT_MS = 10000;
 const VISIBILITY_POLL_MS = 250;
+const POPUP_STYLE_ID = "mem-hide-popup-style";
+const POPUP_HIDDEN_CLASS = "mem-hide-annotation-popup";
+const HIDE_POPUP_CSS = `:root.${POPUP_HIDDEN_CLASS} .view-popup.annotation-popup { display: none !important; }`;
 
 /** Everything Memory needs from the Zotero PDF reader, kept behind one small interface. */
 export class PdfBridge {
@@ -26,6 +29,7 @@ export class PdfBridge {
   private readonly cleanups: Cleanup[] = [];
   private hoveredNodes: Element[] = [];
   private compactNotes = false;
+  private readonly selectionCallbacks: Array<(ids: string[]) => void> = [];
 
   constructor(private readonly reader: AnyRecord) {}
 
@@ -91,9 +95,13 @@ export class PdfBridge {
     const original = reader?._updateState;
     if (reader && typeof original === "function") {
       let live = true;
+      const emitSelection = (ids: string[]) => this.emitSelection(ids);
       const wrapped = function (this: unknown, state: AnyRecord | undefined, ...rest: unknown[]) {
         const result = original.call(this, state, ...rest);
         if (live && state && ("annotations" in state || "showAnnotations" in state)) callback();
+        if (live && state && Array.isArray(state.selectedAnnotationIDs)) {
+          emitSelection(state.selectedAnnotationIDs.map(String));
+        }
         return result;
       };
       try {
@@ -122,6 +130,7 @@ export class PdfBridge {
   }
 
   onSelection(callback: (ids: string[]) => void): void {
+    this.selectionCallbacks.push(callback);
     const doc = this.pdfDocument;
     const pdfWindow = this.pdfWindow;
     if (!doc || !pdfWindow) return;
@@ -182,6 +191,20 @@ export class PdfBridge {
     for (const node of this.hoveredNodes) node.classList.add("mem-native-hover");
   }
 
+  /** Hides the reader's own annotation popup, whose comment the margin card already shows. */
+  setAnnotationPopupHidden(hidden: boolean): void {
+    const doc = this.readerDocument();
+    const root = doc?.documentElement;
+    if (!doc || !root) return;
+    if (hidden && !doc.getElementById(POPUP_STYLE_ID)) {
+      const style = doc.createElement("style");
+      style.id = POPUP_STYLE_ID;
+      style.textContent = HIDE_POPUP_CSS;
+      (doc.head ?? root).append(style);
+    }
+    root.classList.toggle(POPUP_HIDDEN_CLASS, hidden);
+  }
+
   setCompactNotes(enabled: boolean): void {
     this.compactNotes = enabled;
     this.applyCompactNotes();
@@ -200,6 +223,10 @@ export class PdfBridge {
   destroy(): void {
     this.hoverAnnotation(undefined);
     this.shadowRoot()?.getElementById(NATIVE_HOVER_STYLE_ID)?.remove();
+    const readerDoc = this.readerDocument();
+    readerDoc?.documentElement?.classList.remove(POPUP_HIDDEN_CLASS);
+    readerDoc?.getElementById(POPUP_STYLE_ID)?.remove();
+    this.selectionCallbacks.length = 0;
     if (this.compactNotes) this.setCompactNotes(false);
     for (const cleanup of this.cleanups.splice(0)) {
       try {
@@ -232,6 +259,24 @@ export class PdfBridge {
       }
     }
     return [...matches];
+  }
+
+  private emitSelection(ids: string[]): void {
+    for (const callback of this.selectionCallbacks) {
+      try {
+        callback(ids);
+      } catch (error) {
+        logError(error);
+      }
+    }
+  }
+
+  private readerDocument(): Document | undefined {
+    try {
+      return (this.reader?._iframeWindow as Window | undefined)?.document ?? undefined;
+    } catch {
+      return undefined;
+    }
   }
 
   private visibilitySignature(): string {

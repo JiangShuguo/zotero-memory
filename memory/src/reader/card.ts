@@ -1,6 +1,8 @@
 import { MARKS, SIZES, parseComment, renderRich, type Mark } from "../markup/rich-text";
 import type { AnnotationType, MarginNote, PageAnchor } from "../model/types";
 import { RichEditor, type FormatCommand } from "./rich-editor";
+import { PreviewSelection } from "./preview-selection";
+import { CardScrollbar } from "./scrollbar";
 
 const SAVE_DELAY_MS = 700;
 const STATUS_CLEAR_MS = 1200;
@@ -9,6 +11,8 @@ export interface CardHost {
   save(card: Card, value: string): Promise<void>;
   copyText(text: string): void;
   activate(card: Card): void;
+  /** Marks the card as current without selecting the annotation in the reader. */
+  highlight(card: Card): void;
   hover(card: Card, hovered: boolean): void;
   resized(card: Card): void;
   editingChanged(card: Card): void;
@@ -40,7 +44,6 @@ const TYPE_NAMES: Record<AnnotationType, string> = {
   text: "Text annotation",
   image: "Image annotation",
 };
-
 /** One margin card. It owns its DOM, its draft and its autosave timer. */
 export class Card {
   readonly element: HTMLElement;
@@ -52,6 +55,8 @@ export class Card {
   private readonly editorElement: HTMLElement;
   private readonly status: HTMLElement;
   private readonly editor: RichEditor;
+  private readonly scrollbar: CardScrollbar;
+  private readonly selection: PreviewSelection;
   private readonly buttons: ToolButton[] = [];
   private saved: string;
   private draft: string;
@@ -81,6 +86,7 @@ export class Card {
     this.preview.className = "mem-preview";
     this.preview.tabIndex = 0;
     this.preview.setAttribute("role", "button");
+    this.selection = new PreviewSelection(this.preview);
 
     this.editorElement = doc.createElement("div");
     this.editorElement.className = "mem-editor";
@@ -96,13 +102,15 @@ export class Card {
     this.status.className = "mem-status";
     footer.append(this.status);
 
-    this.element.append(this.bar, this.preview, this.editorElement, footer);
+    this.scrollbar = new CardScrollbar(doc);
+    this.element.append(this.bar, this.preview, this.editorElement, footer, this.scrollbar.element);
     this.applyNote();
     this.editor.load(this.draft);
     this.renderPreview();
     this.bindCard();
     this.bindEditor();
     this.bindToolbar();
+    this.scrollbar.attach(this.preview);
   }
 
   get key(): string {
@@ -144,6 +152,7 @@ export class Card {
     if (!this.editing) {
       this.editing = true;
       this.element.classList.add("mem-editing");
+      this.scrollbar.attach(this.editorElement);
       this.host.editingChanged(this);
     }
     this.editorElement.focus({ preventScroll: true });
@@ -156,6 +165,7 @@ export class Card {
     this.clearTimers();
     if (this.dirty && !this.saving) void this.persist();
     for (const cleanup of this.cleanups.splice(0)) cleanup();
+    this.scrollbar.destroy();
     this.element.remove();
   }
 
@@ -167,16 +177,34 @@ export class Card {
     card.addEventListener("pointerenter", () => this.host.hover(this, true));
     card.addEventListener("pointerleave", () => this.host.hover(this, false));
     card.addEventListener("pointerdown", (event) => {
-      if (this.editorElement.contains(event.target as Node)) return;
+      const target = event.target as Node;
+      if (this.editorElement.contains(target)) return;
       // Skips the reader's mousedown handler, which would drop the annotation selection.
       event.preventDefault();
+      if (this.scrollbar.element.contains(target) || this.preview.contains(target)) return;
       if (event.button === 0) this.host.activate(this);
     });
     for (const name of ["pointerdown", "pointerup", "mousedown", "mouseup", "click", "dblclick", "contextmenu"]) {
       card.addEventListener(name, (event) => event.stopPropagation());
     }
-    this.preview.addEventListener("click", () => this.open());
+    this.preview.addEventListener("click", (event) => {
+      // Press-and-drag selects text for reading; a plain click opens the editor.
+      if (event.button !== 0 || this.selection.pressSelected) return;
+      // Selecting the annotation here would let the reader take focus from the new editor.
+      this.host.highlight(this);
+      this.open();
+    });
     this.preview.addEventListener("keydown", (event) => {
+      const mod = (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
+      const key = event.key.toLowerCase();
+      if (mod && (key === "c" || key === "a")) {
+        // Zotero's copy handler would put the whole annotation on the clipboard instead.
+        event.preventDefault();
+        event.stopPropagation();
+        if (key === "a") this.selection.selectAll();
+        else if (this.selection.hasSelection()) this.host.copyText(this.selection.text());
+        return;
+      }
       if (event.key !== "Enter" && event.key !== " ") return;
       event.preventDefault();
       this.open();
@@ -370,6 +398,7 @@ export class Card {
     this.editing = false;
     this.element.classList.remove("mem-editing");
     this.renderPreview();
+    this.scrollbar.attach(this.preview);
     this.host.editingChanged(this);
   }
 
@@ -444,6 +473,7 @@ export class Card {
       this.preview.textContent = this.editorElement.dataset.placeholder ?? "";
     }
     this.preview.classList.toggle("mem-empty", !this.draft);
+    this.scrollbar.refresh();
   }
 
   private syncToolbar(): void {

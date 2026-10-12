@@ -36,6 +36,7 @@ export class ReaderSession {
   private lastGeometry = "";
   private layoutQueued = false;
   private visibilityTimer?: ReturnType<typeof setTimeout>;
+  private popupPending?: string[];
 
   private readonly cardHost: CardHost = {
     save: async (card, value) => {
@@ -47,6 +48,7 @@ export class ReaderSession {
       this.setActive(card.key);
       this.bridge.select(card.key);
     },
+    highlight: (card) => this.setActive(card.key),
     hover: (card, hovered) => {
       if (hovered) this.setHover(card.key);
       else if (this.hoveredKey === card.key) this.setHover(undefined);
@@ -134,6 +136,7 @@ export class ReaderSession {
     this.bridge.onAnnotationVisibility(() => this.scheduleVisibility());
     this.bridge.onSelection((ids) => {
       if (ids.length === 1) this.setActive(ids[0]!);
+      this.syncPopup(ids);
     });
     if (this.settings.compactNotes) this.bridge.setCompactNotes(true);
     this.refresh();
@@ -203,6 +206,7 @@ export class ReaderSession {
     }
     this.lastGeometry = this.geometryKey();
     this.syncActive();
+    if (this.popupPending) this.recheckPopup();
     if (waiting) this.schedulePaint(true, 1);
   }
 
@@ -312,6 +316,31 @@ export class ReaderSession {
     }, VISIBILITY_SETTLE_MS);
   }
 
+  /**
+   * Hides the reader's popup only when every selected annotation already has a visible card.
+   * Runs on selection changes alone, so a popup the user is typing into never disappears.
+   */
+  private syncPopup(ids: readonly string[]): void {
+    const hasCards = this.settings.enabled && ids.length > 0 && ids.every((id) => this.cards.has(id));
+    // A card may exist before its page is laid out (e.g. after a sidebar jump); retry after paint.
+    this.popupPending = hasCards ? [...ids] : undefined;
+    this.recheckPopup();
+  }
+
+  private recheckPopup(): void {
+    const ids = this.popupPending;
+    if (!ids) {
+      this.bridge.setAnnotationPopupHidden(false);
+      return;
+    }
+    const visible = ids.every((id) => {
+      const card = this.cards.get(id);
+      return Boolean(card && card.element.getClientRects().length > 0);
+    });
+    this.bridge.setAnnotationPopupHidden(visible);
+    if (visible || !ids.every((id) => this.cards.has(id))) this.popupPending = undefined;
+  }
+
   private setActive(key: string): void {
     this.activeKey = key;
     this.syncActive();
@@ -358,6 +387,8 @@ export class ReaderSession {
     this.cards.clear();
     this.removeOverlays();
     this.setHover(undefined);
+    this.popupPending = undefined;
+    this.bridge.setAnnotationPopupHidden(false);
     const doc = this.cardDocument ?? this.bridge.document();
     try {
       this.bridge.viewerElement()?.classList.remove(VIEWER_CLASS);

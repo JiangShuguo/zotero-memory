@@ -164,14 +164,85 @@ export const SURFACE_CSS = `
 }
 
 .mem-preview {
-  display: -webkit-box;
-  max-height: calc(3 * 1.65em);
-  overflow: hidden;
+  display: block;
   cursor: text;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 3;
-  line-clamp: 3;
+  user-select: text;
+  -moz-user-select: text;
 }
+
+.mem-preview:focus { outline: none; }
+
+.mem-preview,
+.mem-editor {
+  max-height: calc(9 * 1.65em);
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* The drawn bar lives in the card's side padding; this keeps the text clear of it. */
+  padding-inline-end: 4px;
+  scrollbar-width: none;
+}
+
+.mem-scrollbar {
+  position: absolute;
+  right: 2px;
+  display: flex;
+  flex-direction: column;
+  width: 8px;
+  opacity: .35;
+  transition: opacity .55s ease;
+  user-select: none;
+  -moz-user-select: none;
+}
+
+.mem-scrollbar[hidden] { display: none; }
+
+.mem-scrollbar:hover,
+.mem-scrollbar.mem-scrolling,
+.mem-scrollbar.mem-dragging {
+  opacity: 1;
+}
+
+.mem-scroll-arrow {
+  flex: none;
+  height: 9px;
+  cursor: default;
+}
+
+.mem-scroll-arrow::before {
+  content: "";
+  display: block;
+  width: 0;
+  height: 0;
+  margin: 2px auto 0;
+  border-inline: 4px solid transparent;
+  opacity: .7;
+}
+
+.mem-scroll-up::before { border-bottom: 5px solid var(--mem-color); }
+.mem-scroll-down::before { border-top: 5px solid var(--mem-color); }
+.mem-scroll-arrow:hover::before { opacity: 1; }
+
+.mem-scroll-track {
+  position: relative;
+  flex: 1;
+  margin: 2px 0;
+}
+
+.mem-scroll-thumb {
+  position: absolute;
+  top: 0;
+  left: 1px;
+  width: 6px;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--mem-color) 65%, transparent);
+  transition: background .14s ease;
+}
+
+.mem-scroll-thumb:hover,
+.mem-scrollbar.mem-dragging .mem-scroll-thumb { background: var(--mem-color); }
+
+.mem-low-zoom .mem-card:not(.mem-editing) .mem-scrollbar { display: none; }
 
 .mem-preview.mem-empty {
   color: color-mix(in srgb, CanvasText 48%, transparent);
@@ -181,8 +252,6 @@ export const SURFACE_CSS = `
 .mem-editor {
   display: none;
   min-height: 37px;
-  max-height: 156px;
-  overflow-y: auto;
   outline: none;
   cursor: text;
   user-select: text;
@@ -262,7 +331,9 @@ export const SURFACE_CSS = `
 }
 
 .mem-editor::selection,
-.mem-editor *::selection {
+.mem-editor *::selection,
+.mem-preview::selection,
+.mem-preview *::selection {
   background: Highlight !important;
   color: HighlightText !important;
 }
@@ -293,7 +364,9 @@ export const SURFACE_CSS = `
   max-height: 1.65em;
   overflow: hidden;
   text-overflow: ellipsis;
+  overflow-y: hidden;
   white-space: nowrap;
+  padding-inline-end: 0;
 }
 
 @media (prefers-color-scheme: dark) {
