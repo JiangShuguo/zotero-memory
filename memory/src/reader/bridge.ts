@@ -29,7 +29,10 @@ export class PdfBridge {
   private readonly cleanups: Cleanup[] = [];
   private hoveredNodes: Element[] = [];
   private compactNotes = false;
+  private stateHooked = false;
   private readonly selectionCallbacks: Array<(ids: string[]) => void> = [];
+  private readonly popupCallbacks: Array<(ids: string[]) => void> = [];
+  private readonly visibilityCallbacks: Array<() => void> = [];
 
   constructor(private readonly reader: AnyRecord) {}
 
@@ -91,46 +94,13 @@ export class PdfBridge {
 
   /** Calls back when the reader's own annotation filter (sidebar search, hide all) changes. */
   onAnnotationVisibility(callback: () => void): void {
-    const reader = this.internalReader;
-    const original = reader?._updateState;
-    if (reader && typeof original === "function") {
-      let live = true;
-      const emitSelection = (ids: string[]) => this.emitSelection(ids);
-      const wrapped = function (this: unknown, state: AnyRecord | undefined, ...rest: unknown[]) {
-        const result = original.call(this, state, ...rest);
-        if (live && state && ("annotations" in state || "showAnnotations" in state)) callback();
-        if (live && state && Array.isArray(state.selectedAnnotationIDs)) {
-          emitSelection(state.selectedAnnotationIDs.map(String));
-        }
-        return result;
-      };
-      try {
-        reader._updateState = wrapped;
-        if (reader._updateState === wrapped) {
-          this.cleanups.push(() => {
-            live = false;
-            if (reader._updateState === wrapped) reader._updateState = original;
-          });
-          return;
-        }
-      } catch {
-        live = false;
-      }
-    }
-    const pdfWindow = this.pdfWindow;
-    if (!pdfWindow) return;
-    let previous = this.visibilitySignature();
-    const timer = pdfWindow.setInterval(() => {
-      const next = this.visibilitySignature();
-      if (next === previous) return;
-      previous = next;
-      callback();
-    }, VISIBILITY_POLL_MS);
-    this.cleanups.push(() => pdfWindow.clearInterval(timer));
+    this.visibilityCallbacks.push(callback);
+    this.ensureStateHook();
   }
 
   onSelection(callback: (ids: string[]) => void): void {
     this.selectionCallbacks.push(callback);
+    this.ensureStateHook();
     const doc = this.pdfDocument;
     const pdfWindow = this.pdfWindow;
     if (!doc || !pdfWindow) return;
@@ -141,6 +111,17 @@ export class PdfBridge {
       doc.removeEventListener("pointerup", run, true);
       doc.removeEventListener("keyup", run, true);
     });
+  }
+
+  /** Fires when the reader's built-in annotation popup opens or closes. */
+  onAnnotationPopup(callback: (ids: string[]) => void): void {
+    this.popupCallbacks.push(callback);
+    this.ensureStateHook();
+  }
+
+  /** Annotation IDs currently shown in the reader's annotation popup, if any. */
+  annotationPopupIDs(): string[] {
+    return popupIDsFromState(this.internalReader?._state);
   }
 
   selectedIDs(): string[] {
@@ -227,6 +208,9 @@ export class PdfBridge {
     readerDoc?.documentElement?.classList.remove(POPUP_HIDDEN_CLASS);
     readerDoc?.getElementById(POPUP_STYLE_ID)?.remove();
     this.selectionCallbacks.length = 0;
+    this.popupCallbacks.length = 0;
+    this.visibilityCallbacks.length = 0;
+    this.stateHooked = false;
     if (this.compactNotes) this.setCompactNotes(false);
     for (const cleanup of this.cleanups.splice(0)) {
       try {
@@ -261,10 +245,93 @@ export class PdfBridge {
     return [...matches];
   }
 
+  /**
+   * Watches the reader's `_updateState` once for selection, visibility, and annotation-popup
+   * changes. Falls back to a short poll when the hook cannot be installed.
+   */
+  private ensureStateHook(): void {
+    if (this.stateHooked) return;
+    this.stateHooked = true;
+    const reader = this.internalReader;
+    const original = reader?._updateState;
+    if (reader && typeof original === "function") {
+      let live = true;
+      const emitSelection = (ids: string[]) => this.emitSelection(ids);
+      const emitPopup = (ids: string[]) => this.emitPopup(ids);
+      const emitVisibility = () => this.emitVisibility();
+      let lastPopup = popupSignature(reader._state);
+      const wrapped = function (this: unknown, state: AnyRecord | undefined, ...rest: unknown[]) {
+        const result = original.call(this, state, ...rest);
+        if (!live || !state) return result;
+        if ("annotations" in state || "showAnnotations" in state) emitVisibility();
+        if (Array.isArray(state.selectedAnnotationIDs)) {
+          emitSelection(state.selectedAnnotationIDs.map(String));
+        }
+        if ("primaryViewAnnotationPopup" in state || "secondaryViewAnnotationPopup" in state) {
+          const next = popupSignature(state);
+          if (next !== lastPopup) {
+            lastPopup = next;
+            emitPopup(popupIDsFromState(state));
+          }
+        }
+        return result;
+      };
+      try {
+        reader._updateState = wrapped;
+        if (reader._updateState === wrapped) {
+          this.cleanups.push(() => {
+            live = false;
+            if (reader._updateState === wrapped) reader._updateState = original;
+          });
+          return;
+        }
+      } catch {
+        live = false;
+      }
+    }
+    const pdfWindow = this.pdfWindow;
+    if (!pdfWindow) return;
+    let previousVisibility = this.visibilitySignature();
+    let previousPopup = popupSignature(this.internalReader?._state);
+    const timer = pdfWindow.setInterval(() => {
+      const nextVisibility = this.visibilitySignature();
+      if (nextVisibility !== previousVisibility) {
+        previousVisibility = nextVisibility;
+        this.emitVisibility();
+      }
+      const nextPopup = popupSignature(this.internalReader?._state);
+      if (nextPopup !== previousPopup) {
+        previousPopup = nextPopup;
+        this.emitPopup(this.annotationPopupIDs());
+      }
+    }, VISIBILITY_POLL_MS);
+    this.cleanups.push(() => pdfWindow.clearInterval(timer));
+  }
+
   private emitSelection(ids: string[]): void {
     for (const callback of this.selectionCallbacks) {
       try {
         callback(ids);
+      } catch (error) {
+        logError(error);
+      }
+    }
+  }
+
+  private emitPopup(ids: string[]): void {
+    for (const callback of this.popupCallbacks) {
+      try {
+        callback(ids);
+      } catch (error) {
+        logError(error);
+      }
+    }
+  }
+
+  private emitVisibility(): void {
+    for (const callback of this.visibilityCallbacks) {
+      try {
+        callback();
       } catch (error) {
         logError(error);
       }
@@ -325,4 +392,19 @@ function wait(ms: number): Promise<void> {
 
 async function settle(value: unknown): Promise<void> {
   if (value && typeof (value as PromiseLike<unknown>).then === "function") await value;
+}
+
+function popupIDsFromState(state: AnyRecord | undefined): string[] {
+  if (!state) return [];
+  const ids: string[] = [];
+  for (const key of ["primaryViewAnnotationPopup", "secondaryViewAnnotationPopup"] as const) {
+    const popup = state[key];
+    const id = popup?.annotation?.id ?? popup?.annotation?.key;
+    if (id !== undefined && id !== null) ids.push(String(id));
+  }
+  return ids;
+}
+
+function popupSignature(state: AnyRecord | undefined): string {
+  return popupIDsFromState(state).join("|");
 }

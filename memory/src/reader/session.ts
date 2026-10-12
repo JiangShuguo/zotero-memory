@@ -37,6 +37,8 @@ export class ReaderSession {
   private layoutQueued = false;
   private visibilityTimer?: ReturnType<typeof setTimeout>;
   private popupPending?: string[];
+  /** Annotations whose native popup is open and that did not yet have a margin card. */
+  private readonly holdForPopup = new Set<string>();
 
   private readonly cardHost: CardHost = {
     save: async (card, value) => {
@@ -138,8 +140,10 @@ export class ReaderSession {
       if (ids.length === 1) this.setActive(ids[0]!);
       this.syncPopup(ids);
     });
+    this.bridge.onAnnotationPopup((ids) => this.syncPopupHold(ids));
     if (this.settings.compactNotes) this.bridge.setCompactNotes(true);
     this.refresh();
+    this.syncPopupHold(this.bridge.annotationPopupIDs());
   }
 
   private paint(): void {
@@ -155,11 +159,11 @@ export class ReaderSession {
     this.cardDocument = doc;
     ensureStyle(doc);
 
-    const shown = this.notes.filter(
-      (note) =>
-        this.cards.get(note.key)?.busy ||
-        (this.settings.kinds.has(note.type) && noteShouldShow(note, this.pinned)),
-    );
+    const shown = this.notes.filter((note) => {
+      if (this.cards.get(note.key)?.busy) return true;
+      if (this.holdForPopup.has(note.key)) return false;
+      return this.settings.kinds.has(note.type) && noteShouldShow(note, this.pinned);
+    });
     this.syncCards(doc, shown);
     viewer.classList.toggle(VIEWER_CLASS, shown.length > 0);
     if (!shown.length) {
@@ -317,11 +321,40 @@ export class ReaderSession {
   }
 
   /**
+   * While the native popup is open for an annotation that has no margin card yet, keep the card
+   * hidden so the user finishes writing in one place. Closing the popup lifts the hold.
+   */
+  private syncPopupHold(ids: readonly string[]): void {
+    const open = new Set(ids);
+    let changed = false;
+    for (const key of [...this.holdForPopup]) {
+      if (open.has(key)) continue;
+      this.holdForPopup.delete(key);
+      changed = true;
+    }
+    for (const id of open) {
+      if (this.holdForPopup.has(id)) continue;
+      const card = this.cards.get(id);
+      if (card && card.element.getClientRects().length > 0) continue;
+      this.holdForPopup.add(id);
+      changed = true;
+    }
+    if (changed) this.paint();
+    this.syncPopup(this.bridge.selectedIDs());
+  }
+
+  /**
    * Hides the reader's popup only when every selected annotation already has a visible card.
    * Runs on selection changes alone, so a popup the user is typing into never disappears.
    */
   private syncPopup(ids: readonly string[]): void {
-    const hasCards = this.settings.enabled && ids.length > 0 && ids.every((id) => this.cards.has(id));
+    const hasCards =
+      this.settings.enabled &&
+      ids.length > 0 &&
+      ids.every((id) => {
+        if (this.holdForPopup.has(id)) return false;
+        return this.cards.has(id);
+      });
     // A card may exist before its page is laid out (e.g. after a sidebar jump); retry after paint.
     this.popupPending = hasCards ? [...ids] : undefined;
     this.recheckPopup();
@@ -388,6 +421,7 @@ export class ReaderSession {
     this.removeOverlays();
     this.setHover(undefined);
     this.popupPending = undefined;
+    this.holdForPopup.clear();
     this.bridge.setAnnotationPopupHidden(false);
     const doc = this.cardDocument ?? this.bridge.document();
     try {

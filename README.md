@@ -6,7 +6,7 @@
 
 | | |
 | --- | --- |
-| Version | 1.1.0 |
+| Version | 1.1.1 |
 | Author | jsg |
 | Compatible with | Zotero 7.x – 10.* |
 | License | MIT |
@@ -58,7 +58,7 @@ Shortcut keys while editing: Ctrl/Cmd+B / I / U for bold, italic, and underline;
 | Context menu | Show selected annotations as margin cards |
 | Hover | Hovering a card highlights the matching annotation on the page |
 | Selection | Selecting an annotation highlights its card |
-| Native popup | Hidden when a margin card is shown; otherwise Zotero’s popup is used |
+| Native popup | Used to write a new comment; hidden once a margin card is shown |
 | Preferences | Choose which annotation types appear, and optionally draw smaller note icons |
 
 Comments are stored in Zotero’s annotation comment field.
