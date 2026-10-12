@@ -10,19 +10,15 @@ export interface PlacedCard extends CardSlot {
 
 export interface ColumnArrangement {
   placed: PlacedCard[];
-  hiddenIDs: string[];
+  /** True when the cards are taller than the page and the column scrolls. */
   overflow: boolean;
   contentHeight: number;
-  summaryY?: number;
 }
 
 interface ArrangeOptions {
   pageHeight: number;
   padding?: number;
   gap?: number;
-  expanded?: boolean;
-  summaryHeight?: number;
-  expandedTop?: number;
 }
 
 export function arrangeColumn(slots: readonly CardSlot[], options: ArrangeOptions): ColumnArrangement {
@@ -38,52 +34,19 @@ export function arrangeColumn(slots: readonly CardSlot[], options: ArrangeOption
   if (!overflow) {
     return {
       placed: placeNearAnchors(ordered, { pageHeight, padding, gap }),
-      hiddenIDs: [],
       overflow: false,
       contentHeight: pageHeight,
     };
   }
 
-  if (options.expanded) {
-    const top = Math.max(padding, options.expandedTop ?? 44);
-    const placed: PlacedCard[] = [];
-    let cursor = top;
-    for (const slot of ordered) {
-      const y = Math.max(cursor, Math.max(top, slot.anchorY - slot.height / 2));
-      placed.push({ ...slot, y });
-      cursor = y + slot.height + gap;
-    }
-    return {
-      placed,
-      hiddenIDs: [],
-      overflow: true,
-      contentHeight: Math.max(pageHeight, cursor - gap + padding),
-    };
-  }
-
-  const summaryHeight = Math.max(1, options.summaryHeight ?? 36);
-  const summaryY = Math.max(padding, pageHeight - padding - summaryHeight);
-  const limit = Math.max(padding, summaryY - gap);
-  let used = padding;
-  let visibleCount = 0;
+  const placed: PlacedCard[] = [];
+  let cursor = padding;
   for (const slot of ordered) {
-    const next = used + (visibleCount ? gap : 0) + slot.height;
-    if (next > limit) break;
-    used = next;
-    visibleCount += 1;
+    const y = Math.max(cursor, slot.anchorY - slot.height / 2);
+    placed.push({ ...slot, y });
+    cursor = y + slot.height + gap;
   }
-  const visible = ordered.slice(0, visibleCount);
-  return {
-    placed: placeNearAnchors(visible, {
-      pageHeight: limit + padding,
-      padding,
-      gap,
-    }),
-    hiddenIDs: ordered.slice(visibleCount).map((slot) => slot.id),
-    overflow: true,
-    contentHeight: pageHeight,
-    summaryY,
-  };
+  return { placed, overflow: true, contentHeight: cursor - gap + padding };
 }
 
 function placeNearAnchors(

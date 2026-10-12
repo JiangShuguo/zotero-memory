@@ -2,6 +2,7 @@ import { arrangeColumn, type ColumnArrangement, type PlacedCard } from "../model
 import type { MarginSide } from "../model/types";
 import type { PdfPage } from "./bridge";
 import type { Card } from "./card";
+import { CardScrollbar } from "./scrollbar";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 const CARD_WIDTH = 264;
@@ -11,15 +12,12 @@ const GUTTER = CARD_WIDTH + PAGE_GAP;
 const COLLAPSE_SCALE = 0.8;
 const PADDING = 8;
 const GAP = 8;
-const SUMMARY_HEIGHT = 34;
-const EXPANDED_TOP = 48;
+const REVEAL_MARGIN = 32;
 const LINE_END_OFFSET = 26;
 const FALLBACK_CARD_HEIGHT = 70;
 const SIDES: readonly MarginSide[] = ["left", "right"];
 
 export interface OverlayHost {
-  isColumnOpen(pageIndex: number, side: MarginSide): boolean;
-  setColumnOpen(pageIndex: number, side: MarginSide, open: boolean): void;
   hoveredKey(): string | undefined;
 }
 
@@ -28,7 +26,13 @@ interface Column {
   root: HTMLElement;
   scroller: HTMLElement;
   body: HTMLElement;
-  toggle: HTMLButtonElement;
+  bar: CardScrollbar;
+}
+
+interface ColumnPlan {
+  side: MarginSide;
+  cards: Card[];
+  result: ColumnArrangement;
 }
 
 /** The margin columns and leader lines of one PDF page. */
@@ -97,6 +101,23 @@ export class PageOverlay {
     this.drawLines();
   }
 
+  /** Scrolls an overflowing column so the card is fully visible. */
+  reveal(key: string): void {
+    const card = this.cards.find((candidate) => candidate.key === key);
+    const place = this.places.get(key);
+    if (!card || !place) return;
+    const { scroller } = this.columns[card.anchor!.side];
+    const view = scroller.clientHeight;
+    if (scroller.scrollHeight <= view + 1) return;
+    // Keep the card clear of the edge fades.
+    const top = place.y - REVEAL_MARGIN;
+    const bottom = place.y + place.height + REVEAL_MARGIN;
+    let next = scroller.scrollTop;
+    if (top < next) next = top;
+    else if (bottom > next + view) next = Math.min(top, bottom - view);
+    if (next !== scroller.scrollTop) scroller.scrollTo({ top: next, behavior: "smooth" });
+  }
+
   setHovered(key: string | undefined): void {
     for (const node of Array.from(this.lines.children)) {
       node.classList.toggle("mem-hovered", (node as SVGElement).dataset.annotationKey === key);
@@ -108,6 +129,7 @@ export class PageOverlay {
       if (this.owns(card)) card.element.remove();
     }
     this.cards = [];
+    for (const side of SIDES) this.columns[side].bar.destroy();
     this.element.remove();
   }
 
@@ -117,70 +139,48 @@ export class PageOverlay {
     const root = doc.createElement("section");
     const scroller = doc.createElement("div");
     const body = doc.createElement("div");
-    const toggle = doc.createElement("button");
     root.className = `mem-column mem-column-${side}`;
     scroller.className = "mem-scroll";
     body.className = "mem-column-body";
-    toggle.type = "button";
-    toggle.className = "mem-expand";
-    toggle.hidden = true;
+    const bar = new CardScrollbar(doc);
     scroller.append(body);
-    root.append(scroller, toggle);
-    toggle.addEventListener("click", () => this.toggleColumn(side));
-    scroller.addEventListener("scroll", () => this.drawLines());
-    return { side, root, scroller, body, toggle };
+    root.append(scroller, bar.element);
+    bar.attach(scroller);
+    scroller.addEventListener("scroll", () => {
+      this.syncFades(scroller);
+      this.drawLines();
+    });
+    return { side, root, scroller, body, bar };
   }
 
-  private toggleColumn(side: MarginSide): void {
-    const column = this.columns[side];
-    const open = !column.root.classList.contains("mem-expanded");
-    this.host.setColumnOpen(this.pageIndex, side, open);
-    if (!open) {
-      const active = column.root.ownerDocument.activeElement as HTMLElement | null;
-      if (active && column.root.contains(active)) active.blur();
-      column.scroller.scrollTop = 0;
-    }
-    this.layout();
+  /** Fades the scroller edges only where more cards are hidden beyond them. */
+  private syncFades(scroller: HTMLElement): void {
+    const max = scroller.scrollHeight - scroller.clientHeight;
+    scroller.classList.toggle("mem-fade-top", scroller.scrollTop > 1);
+    scroller.classList.toggle("mem-fade-bottom", max > 1 && scroller.scrollTop < max - 1);
   }
 
-  private plan(side: MarginSide, pageHeight: number): { side: MarginSide; cards: Card[]; result: ColumnArrangement; expanded: boolean } {
+  private plan(side: MarginSide, pageHeight: number): ColumnPlan {
     const cards = this.cards.filter(
       (card) => card.anchor!.side === side && !card.element.classList.contains("mem-filtered"),
     );
-    const editing = cards.some((card) => card.isEditing);
-    const wantOpen = this.host.isColumnOpen(this.pageIndex, side);
     const result = arrangeColumn(
       cards.map((card) => ({ id: card.key, anchorY: card.anchor!.y, height: measure(card) })),
-      {
-        pageHeight,
-        padding: PADDING,
-        gap: GAP,
-        summaryHeight: SUMMARY_HEIGHT,
-        expandedTop: EXPANDED_TOP,
-        expanded: wantOpen || editing,
-      },
+      { pageHeight, padding: PADDING, gap: GAP },
     );
-    if (!result.overflow && wantOpen) this.host.setColumnOpen(this.pageIndex, side, false);
-    return { side, cards, result, expanded: result.overflow && (wantOpen || editing) };
+    return { side, cards, result };
   }
 
-  private apply(plan: { side: MarginSide; cards: Card[]; result: ColumnArrangement; expanded: boolean }): void {
-    const { side, cards, result, expanded } = plan;
+  private apply({ side, cards, result }: ColumnPlan): void {
     const column = this.columns[side];
-    if (!expanded) column.scroller.scrollTop = 0;
-    column.root.classList.toggle("mem-expanded", expanded);
-    column.toggle.hidden = !result.overflow;
-    column.toggle.setAttribute("aria-expanded", String(expanded));
-    const label = expanded ? "Collapse" : `${result.hiddenIDs.length} more · Show all`;
-    if (column.toggle.textContent !== label) column.toggle.textContent = label;
-    setPx(column.toggle, "top", expanded ? PADDING : result.summaryY ?? 0);
+    if (!result.overflow) column.scroller.scrollTop = 0;
+    column.root.classList.toggle("mem-overflowing", result.overflow);
     setPx(column.body, "height", result.contentHeight);
-    const placed = new Map(result.placed.map((place) => [place.id, place]));
-    for (const card of cards) {
-      const place = placed.get(card.key);
-      card.element.classList.toggle("mem-overflow-hidden", !place);
-      if (!place) continue;
-      this.places.set(card.key, place);
+    this.syncFades(column.scroller);
+    column.bar.refresh();
+    for (const place of result.placed) {
+      this.places.set(place.id, place);
+      const card = cards.find((candidate) => candidate.key === place.id)!;
       setPx(card.element, "top", place.y);
     }
   }
@@ -195,10 +195,8 @@ export class PageOverlay {
       const anchor = card.anchor;
       if (!place || !anchor || card.element.parentNode !== this.columns[anchor.side].body) continue;
       const column = this.columns[anchor.side];
-      const expanded = column.root.classList.contains("mem-expanded");
-      const cardY = place.y - (expanded ? column.scroller.scrollTop : 0);
-      const endY = cardY + Math.min(LINE_END_OFFSET, place.height / 2);
-      if (expanded && (endY < 0 || endY > height)) continue;
+      const endY = place.y - column.scroller.scrollTop + Math.min(LINE_END_OFFSET, place.height / 2);
+      if (endY < 0 || endY > height) continue;
       const left = anchor.side === "left";
       const elbowX = left ? -ELBOW : width + ELBOW;
       const endX = left ? -PAGE_GAP : width + PAGE_GAP;

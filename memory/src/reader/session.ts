@@ -1,5 +1,5 @@
 import { anchorOnPage, compactNoteAnchor, noteShouldShow } from "../model/anchor";
-import type { MarginNote, MarginSide, PageAnchor } from "../model/types";
+import type { MarginNote, PageAnchor } from "../model/types";
 import { logError, type Settings } from "../settings";
 import type { NoteStore } from "../store";
 import { PdfBridge, type PdfPage } from "./bridge";
@@ -18,7 +18,6 @@ export class ReaderSession {
   private readonly cards = new Map<string, Card>();
   private readonly overlays = new Map<number, PageOverlay>();
   private readonly pinned = new Set<string>();
-  private readonly openColumns = new Set<string>();
   private readonly pendingLayout = new Set<PageOverlay>();
   private notes: MarginNote[] = [];
   private nativeVisible?: ReadonlySet<string>;
@@ -63,11 +62,6 @@ export class ReaderSession {
   };
 
   private readonly overlayHost: OverlayHost = {
-    isColumnOpen: (pageIndex, side) => this.openColumns.has(columnKey(pageIndex, side)),
-    setColumnOpen: (pageIndex, side, open) => {
-      if (open) this.openColumns.add(columnKey(pageIndex, side));
-      else this.openColumns.delete(columnKey(pageIndex, side));
-    },
     hoveredKey: () => this.hoveredKey,
   };
 
@@ -377,6 +371,8 @@ export class ReaderSession {
   private setActive(key: string): void {
     this.activeKey = key;
     this.syncActive();
+    const card = this.cards.get(key);
+    if (card) this.overlays.get(card.note.position.pageIndex)?.reveal(key);
   }
 
   private syncActive(): void {
@@ -451,10 +447,6 @@ function copyToClipboard(text: string): void {
   } catch (error) {
     logError(error);
   }
-}
-
-function columnKey(pageIndex: number, side: MarginSide): string {
-  return `${pageIndex}:${side}`;
 }
 
 function clamp(value: number, min: number, max: number): number {

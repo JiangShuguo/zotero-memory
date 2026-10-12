@@ -6,7 +6,7 @@
 
 | | |
 | --- | --- |
-| Version | 1.1.1 |
+| Version | 1.1.2 |
 | Author | jsg |
 | Compatible with | Zotero 7.x – 10.* |
 | License | MIT |
@@ -29,7 +29,7 @@ For each visible annotation that has a comment (or a note / a temporarily pinned
 | --- | --- |
 | Card border | Uses the annotation color on all four sides |
 | Placement | Near the annotation; left or right according to where the mark sits on the page |
-| Overflow | When a column is full, Memory keeps the cards that fit and offers a control to expand the rest |
+| Overflow | When a column is full, scroll the column to see the rest |
 | Low zoom | Below 80% zoom, non-editing cards collapse to a single line |
 
 ### Reading and editing

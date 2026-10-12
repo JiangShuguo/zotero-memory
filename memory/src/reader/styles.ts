@@ -82,12 +82,15 @@ export const SURFACE_CSS = `
 .mem-column-left { right: calc(100% + 24px); }
 .mem-column-right { left: calc(100% + 24px); }
 
+.mem-column {
+  --mem-color: color-mix(in srgb, CanvasText 50%, transparent);
+}
+
 .mem-scroll {
   position: absolute;
   inset: 0;
   overflow: visible;
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, CanvasText 32%, transparent) transparent;
+  scrollbar-width: none;
 }
 
 .mem-column-body {
@@ -96,30 +99,25 @@ export const SURFACE_CSS = `
   min-height: 100%;
 }
 
-.mem-column.mem-expanded .mem-scroll {
+.mem-column.mem-overflowing .mem-scroll {
   overflow-x: hidden;
   overflow-y: auto;
-  overscroll-behavior: contain;
   pointer-events: auto;
 }
 
-.mem-expand {
-  position: absolute;
-  left: 0;
-  z-index: 3;
-  box-sizing: border-box;
-  width: 100%;
-  height: 34px;
-  border: 1px dashed color-mix(in srgb, CanvasText 32%, transparent);
-  border-radius: 12px;
-  background: Canvas;
-  color: CanvasText;
-  font: 12px/1.3 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  cursor: pointer;
-  pointer-events: auto;
+.mem-column.mem-overflowing .mem-scroll.mem-fade-top {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 28px);
 }
 
-.mem-expand[hidden] { display: none; }
+.mem-column.mem-overflowing .mem-scroll.mem-fade-bottom {
+  mask-image: linear-gradient(to top, transparent 0, #000 28px);
+}
+
+.mem-column.mem-overflowing .mem-scroll.mem-fade-top.mem-fade-bottom {
+  mask-image: linear-gradient(to bottom, transparent 0, #000 28px, #000 calc(100% - 28px), transparent 100%);
+}
+
+.mem-column > .mem-scrollbar { right: -12px; }
 
 .mem-card {
   position: absolute;
@@ -142,8 +140,7 @@ export const SURFACE_CSS = `
   box-shadow: 0 8px 18px rgba(0, 0, 0, .12);
 }
 
-.mem-card.mem-filtered,
-.mem-card.mem-overflow-hidden {
+.mem-card.mem-filtered {
   display: none;
 }
 
