@@ -2,7 +2,7 @@
 
 [Zotero](https://www.zotero.org/) plugin for reading and writing annotation notes next to the PDF page. Changes sync back into Zotero’s annotation comments.
 
-[中文说明](README.zh-CN.md)
+[Chinese](README.zh-CN.md)
 
 | | |
 | --- | --- |
@@ -52,7 +52,7 @@ Shortcut keys while editing: Ctrl/Cmd+B / I / U for bold, italic, and underline;
 | | |
 | --- | --- |
 | Toolbar button | Show or hide all margin cards |
-| Context menu | **页边标注** on selected annotations |
+| Context menu | Show selected annotations as margin cards |
 | Hover | Hovering a card highlights the matching annotation on the page |
 | Selection | Selecting an annotation highlights its card |
 | Preferences | Choose which annotation types appear, and optionally draw smaller note icons |
