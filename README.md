@@ -46,7 +46,7 @@ For each visible annotation that has a comment (or a note / a temporarily pinned
 | Cancel | Esc restores the last saved text |
 | Format toolbar | Shown only while that card is being edited |
 
-Supported formatting: bold, italic, underline, strikethrough, superscript, subscript, font sizes 11 / 13 / 15 / 18, bulleted list, and clear formatting. There are no color tools; the card border already shows the annotation color.
+Supported formatting: bold, italic, underline, strikethrough, superscript, subscript, font sizes 11 / 13 / 15 / 18, bulleted list, and clear formatting.
 
 Shortcut keys while editing: Ctrl/Cmd+B / I / U for bold, italic, and underline; Ctrl/Cmd+A selects the whole comment. In the preview, Ctrl/Cmd+A selects the card text and Ctrl/Cmd+C copies the selection.
 
@@ -58,10 +58,10 @@ Shortcut keys while editing: Ctrl/Cmd+B / I / U for bold, italic, and underline;
 | Context menu | Show selected annotations as margin cards |
 | Hover | Hovering a card highlights the matching annotation on the page |
 | Selection | Selecting an annotation highlights its card |
-| Native popup | Hidden when that annotation already has a margin card; annotations without a card still use Zotero’s popup |
+| Native popup | Hidden when a margin card is shown; otherwise Zotero’s popup is used |
 | Preferences | Choose which annotation types appear, and optionally draw smaller note icons |
 
-Comments are stored in Zotero’s usual annotation comment field, so they stay with the item when Memory is disabled or removed.
+Comments are stored in Zotero’s annotation comment field.
 
 ---
 
@@ -80,7 +80,7 @@ Requires Node.js 18+ and Python 3.8+. Output: `memory/build/memory.xpi`.
 2. Zotero → Tools → Plugins → gear → **Install Plugin From File…** → select `memory.xpi`.
 3. Enable **Memory**, then restart Zotero.
 
-After an upgrade, restart once so the previous build is not kept in the startup cache.
+After an upgrade, restart Zotero once.
 
 ---
 
