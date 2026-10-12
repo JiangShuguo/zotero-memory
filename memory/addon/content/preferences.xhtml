@@ -1,0 +1,53 @@
+<vbox id="zotero-prefpane-memory"
+      onload="Zotero.Memory?.bindPreferences(window)">
+  <groupbox data-search-strings-raw="Memory,margin,annotation,comment,highlight,underline,note,text,image,icon">
+    <label>
+      <html:h2 class="mem-prefs-heading">Margin cards</html:h2>
+    </label>
+    <description class="mem-prefs-description">
+      Choose which annotation types get Memory cards. Open PDFs update as soon as you change these options.
+    </description>
+  </groupbox>
+
+  <groupbox>
+    <label>
+      <html:h2 class="mem-prefs-heading">Annotation types</html:h2>
+    </label>
+    <html:div class="mem-prefs-types">
+      <html:label class="mem-prefs-row" for="mem-type-highlight">
+        <html:input id="mem-type-highlight" type="checkbox" data-mem-type="highlight" />
+        <html:span>Highlights</html:span>
+      </html:label>
+      <html:label class="mem-prefs-row" for="mem-type-underline">
+        <html:input id="mem-type-underline" type="checkbox" data-mem-type="underline" />
+        <html:span>Underlines</html:span>
+      </html:label>
+      <html:label class="mem-prefs-row" for="mem-type-note">
+        <html:input id="mem-type-note" type="checkbox" data-mem-type="note" />
+        <html:span>Notes</html:span>
+      </html:label>
+      <html:label class="mem-prefs-row" for="mem-type-text">
+        <html:input id="mem-type-text" type="checkbox" data-mem-type="text" />
+        <html:span>Text annotations</html:span>
+      </html:label>
+      <html:label class="mem-prefs-row" for="mem-type-image">
+        <html:input id="mem-type-image" type="checkbox" data-mem-type="image" />
+        <html:span>Images and areas</html:span>
+      </html:label>
+    </html:div>
+  </groupbox>
+
+  <groupbox>
+    <label>
+      <html:h2 class="mem-prefs-heading">Reader</html:h2>
+    </label>
+    <html:label class="mem-prefs-option" for="mem-compact-notes">
+      <html:input id="mem-compact-notes" type="checkbox" data-mem-setting="compact-notes" />
+      <html:span>
+        <html:strong>Smaller note icons</html:strong>
+        <html:small>Draws the reader's note icons at 14px instead of 24px.</html:small>
+        <html:small>This relies on internals of the Zotero reader. Turn it off if icons or click targets look wrong.</html:small>
+      </html:span>
+    </html:label>
+  </groupbox>
+</vbox>

@@ -1,0 +1,62 @@
+#zotero-prefpane-memory {
+  max-width: 720px;
+}
+
+#zotero-prefpane-memory .mem-prefs-heading {
+  margin: 0 0 6px;
+}
+
+#zotero-prefpane-memory .mem-prefs-description {
+  max-width: 620px;
+  margin-bottom: 8px;
+  color: color-mix(in srgb, currentColor 68%, transparent);
+  line-height: 1.5;
+}
+
+#zotero-prefpane-memory .mem-prefs-types {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(160px, 1fr));
+  gap: 4px 18px;
+  max-width: 520px;
+}
+
+#zotero-prefpane-memory .mem-prefs-row,
+#zotero-prefpane-memory .mem-prefs-option {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  min-height: 32px;
+  padding: 4px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+#zotero-prefpane-memory .mem-prefs-option {
+  align-items: flex-start;
+  max-width: 620px;
+}
+
+#zotero-prefpane-memory .mem-prefs-row:hover,
+#zotero-prefpane-memory .mem-prefs-option:hover {
+  background: color-mix(in srgb, currentColor 7%, transparent);
+}
+
+#zotero-prefpane-memory input {
+  margin: 2px 0 0;
+}
+
+#zotero-prefpane-memory .mem-prefs-option span {
+  display: grid;
+  gap: 3px;
+}
+
+#zotero-prefpane-memory small {
+  color: color-mix(in srgb, currentColor 68%, transparent);
+  line-height: 1.45;
+}
+
+@media (max-width: 620px) {
+  #zotero-prefpane-memory .mem-prefs-types {
+    grid-template-columns: 1fr;
+  }
+}

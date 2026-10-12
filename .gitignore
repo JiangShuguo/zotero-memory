@@ -1,0 +1,20 @@
+# Build outputs
+memory/build/
+memory/node_modules/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Local / debug
+*.log
+.DS_Store
+Thumbs.db
+Desktop.ini
+.env
+.scaffold
+
+# Editor
+.idea/
+.vscode/
+*.swp
+*~

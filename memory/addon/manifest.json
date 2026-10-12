@@ -1,0 +1,20 @@
+{
+  "manifest_version": 2,
+  "name": "Memory",
+  "version": "1.0.0",
+  "description": "Comment cards beside Zotero PDF pages, kept in sync with annotation notes",
+  "homepage_url": "https://github.com/JiangShuguo/zotero-memory",
+  "author": "jsg",
+  "icons": {
+    "48": "content/icons/icon.png",
+    "96": "content/icons/icon@2x.png"
+  },
+  "applications": {
+    "zotero": {
+      "id": "memory@jsg.local",
+      "update_url": "https://raw.githubusercontent.com/JiangShuguo/zotero-memory/main/memory/updates.json",
+      "strict_min_version": "6.999",
+      "strict_max_version": "10.*"
+    }
+  }
+}

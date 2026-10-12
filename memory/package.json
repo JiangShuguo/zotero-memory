@@ -1,0 +1,22 @@
+{
+  "name": "zotero-memory",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Comment cards beside Zotero PDF pages, kept in sync with annotation notes",
+  "license": "MIT",
+  "author": "jsg",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JiangShuguo/zotero-memory.git"
+  },
+  "scripts": {
+    "build": "python tools/build_xpi.py",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.14.1",
+    "esbuild": "^0.25.12",
+    "typescript": "^5.8.3",
+    "zotero-types": "^3.1.9"
+  }
+}
