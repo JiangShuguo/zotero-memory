@@ -4,11 +4,18 @@ import { ReaderSession } from "./reader/session";
 import { TOOLBAR_CSS, TOOLBAR_STYLE_ID } from "./reader/styles";
 import { logError, readSettings, writeCompactNotes, writeEnabled, writeKind, type Settings } from "./settings";
 import { NoteStore } from "./store";
+import { buildBackup, importBackup, parseBackup } from "./transfer/annotations";
+import { alertUser, chooseBackupOpenPath, chooseBackupSavePath } from "./transfer/dialogs";
 
 const PANE_ID = "zotero-prefpane-memory";
 const BUTTON_CLASS = "mem-toolbar-toggle";
 const FALLBACK_SECTION_CLASS = "mem-fallback-section";
 const FALLBACK_BUTTON_DELAY_MS = 350;
+const ITEM_MENU_IDS = {
+  separator: "mem-itemmenu-separator",
+  export: "mem-itemmenu-export",
+  import: "mem-itemmenu-import",
+} as const;
 
 const BUTTON_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true">
   <rect x="2.2" y="3" width="11" height="18" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.5"/>
@@ -26,6 +33,7 @@ export class MemoryPlugin {
   private paneID?: string;
   private notifierID?: string;
   private running = false;
+  private readonly itemMenuCleanups: Array<() => void> = [];
 
   async start(): Promise<void> {
     if (this.running) return;
@@ -36,6 +44,7 @@ export class MemoryPlugin {
     readers.registerEventListener("renderToolbar", this.onRenderToolbar, ADDON_ID);
     readers.registerEventListener("createAnnotationContextMenu", this.onAnnotationMenu, ADDON_ID);
     this.notifierID = Zotero.Notifier.registerObserver(this.notifier as any, ["item", "tab"], ADDON_ID);
+    for (const win of (Zotero as any).getMainWindows?.() ?? []) this.bindItemMenu(win);
     for (const reader of readers._readers ?? []) {
       if (!isPdf(reader)) continue;
       void this.session(reader);
@@ -50,6 +59,7 @@ export class MemoryPlugin {
     readers?._unregisterEventListenerByPluginID?.(ADDON_ID);
     if (this.notifierID) Zotero.Notifier.unregisterObserver(this.notifierID);
     this.notifierID = undefined;
+    for (const cleanup of this.itemMenuCleanups.splice(0)) cleanup();
     for (const session of this.sessions.values()) session.destroy();
     this.sessions.clear();
     this.preferenceDocuments.clear();
@@ -62,6 +72,12 @@ export class MemoryPlugin {
       this.paneID = undefined;
     }
     for (const reader of readers?._readers ?? []) removeToolbarButtons(reader?._iframeWindow?.document);
+  }
+
+  /** Called when a Zotero main window finishes loading. */
+  onMainWindowLoad(win: Window): void {
+    if (!this.running) return;
+    this.bindItemMenu(win);
   }
 
   /** Called by the preference pane once it has loaded. */
@@ -81,6 +97,16 @@ export class MemoryPlugin {
       compact.dataset.memBound = "true";
       compact.addEventListener("command", () => this.setCompactNotes(compact.checked));
       compact.addEventListener("change", () => this.setCompactNotes(compact.checked));
+    }
+    const exportBtn = root.querySelector<HTMLButtonElement>('[data-mem-action="export"]');
+    if (exportBtn && exportBtn.dataset.memBound !== "true") {
+      exportBtn.dataset.memBound = "true";
+      exportBtn.addEventListener("click", () => void this.exportAnnotations());
+    }
+    const importBtn = root.querySelector<HTMLButtonElement>('[data-mem-action="import"]');
+    if (importBtn && importBtn.dataset.memBound !== "true") {
+      importBtn.dataset.memBound = "true";
+      importBtn.addEventListener("click", () => void this.importAnnotations());
     }
     this.syncPreferences();
   }
@@ -248,6 +274,126 @@ export class MemoryPlugin {
       this.sessions.delete(reader);
     }
   }
+
+  private bindItemMenu(win: Window): void {
+    const doc = win.document;
+    const menu = doc.getElementById("zotero-itemmenu");
+    if (!menu || menu.getAttribute("data-mem-bound") === "true") return;
+    menu.setAttribute("data-mem-bound", "true");
+
+    const separator = createXul(doc, "menuseparator");
+    separator.id = ITEM_MENU_IDS.separator;
+    const exportItem = createXul(doc, "menuitem");
+    exportItem.id = ITEM_MENU_IDS.export;
+    exportItem.setAttribute("label", "导出标注备份…");
+    const importItem = createXul(doc, "menuitem");
+    importItem.id = ITEM_MENU_IDS.import;
+    importItem.setAttribute("label", "导入标注备份…");
+
+    const onExport = () => void this.exportAnnotations();
+    const onImport = () => void this.importAnnotations();
+    const onShowing = () => {
+      const enabled = Boolean(resolvePdfAttachment());
+      exportItem.setAttribute("disabled", enabled ? "false" : "true");
+      importItem.setAttribute("disabled", enabled ? "false" : "true");
+    };
+
+    exportItem.addEventListener("command", onExport);
+    importItem.addEventListener("command", onImport);
+    menu.addEventListener("popupshowing", onShowing);
+    menu.append(separator, exportItem, importItem);
+
+    this.itemMenuCleanups.push(() => {
+      menu.removeEventListener("popupshowing", onShowing);
+      exportItem.removeEventListener("command", onExport);
+      importItem.removeEventListener("command", onImport);
+      separator.remove();
+      exportItem.remove();
+      importItem.remove();
+      menu.removeAttribute("data-mem-bound");
+    });
+  }
+
+  private async exportAnnotations(): Promise<void> {
+    try {
+      const attachment = resolvePdfAttachment();
+      if (!attachment) {
+        alertUser("Memory", "请先选中一个 PDF 附件（或打开该 PDF）。");
+        return;
+      }
+      const backup = await buildBackup(attachment);
+      const stem = String(attachment.attachmentFilename || "annotations").replace(/\.pdf$/i, "");
+      const path = await chooseBackupSavePath(`${stem}-memory-annotations.json`);
+      if (!path) return;
+      await (Zotero as any).File.putContentsAsync(path, JSON.stringify(backup, null, 2));
+      alertUser("Memory", `已导出 ${backup.annotations.length} 条批注。`);
+    } catch (error) {
+      logError(error);
+      alertUser("Memory", errorMessage(error));
+    }
+  }
+
+  private async importAnnotations(): Promise<void> {
+    try {
+      const attachment = resolvePdfAttachment();
+      if (!attachment) {
+        alertUser("Memory", "请先选中要还原到的 PDF 附件（或打开该 PDF）。");
+        return;
+      }
+      const path = await chooseBackupOpenPath();
+      if (!path) return;
+      const raw = await (Zotero as any).File.getContentsAsync(path);
+      const backup = parseBackup(String(raw));
+      const result = await importBackup(attachment, backup);
+      for (const session of this.sessions.values()) session.refresh();
+      alertUser(
+        "Memory",
+        `已导入 ${result.created} 条批注` + (result.skipped ? `，跳过 ${result.skipped} 条已存在或无效条目` : "") + "。",
+      );
+    } catch (error) {
+      logError(error);
+      alertUser("Memory", errorMessage(error));
+    }
+  }
+}
+
+function createXul(doc: Document, name: string): XULElement {
+  const create = (doc as any).createXULElement?.bind(doc) as ((tag: string) => XULElement) | undefined;
+  if (create) return create(name);
+  return doc.createElementNS("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul", name) as XULElement;
+}
+
+function resolvePdfAttachment(): any | undefined {
+  const pane = (Zotero as any).getActiveZoteroPane?.();
+  for (const item of pane?.getSelectedItems?.() ?? []) {
+    const pdf = asPdfAttachment(item);
+    if (pdf) return pdf;
+  }
+  for (const reader of (Zotero as any).Reader?._readers ?? []) {
+    if (!isPdf(reader)) continue;
+    const item = (Zotero as any).Items?.get?.(reader.itemID);
+    const pdf = asPdfAttachment(item);
+    if (pdf) return pdf;
+  }
+  return undefined;
+}
+
+function asPdfAttachment(item: any): any | undefined {
+  if (!item) return undefined;
+  if (item.isPDFAttachment?.()) return item;
+  if (item.isAttachment?.() && String(item.attachmentContentType || "").includes("pdf")) return item;
+  if (!item.isRegularItem?.()) return undefined;
+  const ids: number[] = item.getAttachments?.() ?? [];
+  for (const id of ids) {
+    const child = (Zotero as any).Items.get(id);
+    if (child?.isPDFAttachment?.()) return child;
+  }
+  return undefined;
+}
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.message) return error.message;
+  return String(error ?? "Unknown error");
 }
 
 function removeToolbarButtons(doc: Document | undefined): void {

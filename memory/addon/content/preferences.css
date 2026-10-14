@@ -55,6 +55,19 @@
   line-height: 1.45;
 }
 
+#zotero-prefpane-memory .mem-prefs-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+#zotero-prefpane-memory .mem-prefs-actions button {
+  min-height: 30px;
+  padding: 4px 12px;
+  cursor: pointer;
+}
+
 @media (max-width: 620px) {
   #zotero-prefpane-memory .mem-prefs-types {
     grid-template-columns: 1fr;

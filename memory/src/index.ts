@@ -23,6 +23,10 @@ export function shutdown(): void {
   plugin = undefined;
 }
 
+export function onMainWindowLoad({ window }: { window: Window }): void {
+  plugin?.onMainWindowLoad(window);
+}
+
 /** An instance that was not shut down cleanly would keep drawing a second set of cards. */
 function stopPrevious(previous: any): void {
   if (!previous || previous === plugin) return;

@@ -50,4 +50,18 @@
       </html:span>
     </html:label>
   </groupbox>
+
+  <groupbox data-search-strings-raw="export,import,backup,restore,annotation">
+    <label>
+      <html:h2 class="mem-prefs-heading">Backup</html:h2>
+    </label>
+    <description class="mem-prefs-description">
+      Export every annotation on the selected PDF (highlights, underlines, notes, and margin comments).
+      Import restores them only when the target PDF file is byte-identical to the backup.
+    </description>
+    <html:div class="mem-prefs-actions">
+      <html:button type="button" data-mem-action="export">Export annotations…</html:button>
+      <html:button type="button" data-mem-action="import">Import annotations…</html:button>
+    </html:div>
+  </groupbox>
 </vbox>

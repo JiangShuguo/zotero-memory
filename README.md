@@ -6,7 +6,7 @@
 
 | | |
 | --- | --- |
-| Version | 1.1.2 |
+| Version | 1.2.0 |
 | Author | jsg |
 | Compatible with | Zotero 7.x – 10.* |
 | License | MIT |
@@ -60,6 +60,7 @@ Shortcut keys while editing: Ctrl/Cmd+B / I / U for bold, italic, and underline;
 | Selection | Selecting an annotation highlights its card |
 | Native popup | Used to write a new comment; hidden once a margin card is shown |
 | Preferences | Choose which annotation types appear, and optionally draw smaller note icons |
+| Export / import | Item menu or Preferences backs up all annotations on a PDF; import restores them only when the target PDF is byte-identical |
 
 Comments are stored in Zotero’s annotation comment field.
 

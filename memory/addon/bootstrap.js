@@ -20,7 +20,11 @@ async function startup({ id, version, resourceURI, rootURI }, reason) {
   await Memory.startup();
 }
 
-function onMainWindowLoad({ window }, reason) {}
+function onMainWindowLoad(data, reason) {
+  if (typeof Memory !== "undefined" && Memory?.onMainWindowLoad) {
+    Memory.onMainWindowLoad(data);
+  }
+}
 
 function onMainWindowUnload({ window }, reason) {}
 
