@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """Build Memory XPI (Zotero 7-10 requires applications.zotero.update_url)."""
 import json
+import os
 import shutil
 import struct
 import subprocess
@@ -13,7 +14,13 @@ ADDON = ROOT / "addon"
 BUILD = ROOT / "build"
 OUT = BUILD / "memory.xpi"
 ADDON_ID = "memory@jsg.local"
-VERSION = "1.4.3"
+# Override with MEMORY_VERSION=1.4.2 when rebuilding an older release XPI.
+VERSION = os.environ.get("MEMORY_VERSION", "1.4.3").strip() or "1.4.3"
+# Skip rewriting updates.json when packaging an older version via MEMORY_VERSION.
+WRITE_UPDATES = os.environ.get(
+    "MEMORY_WRITE_UPDATES",
+    "0" if os.environ.get("MEMORY_VERSION") else "1",
+) == "1"
 HOMEPAGE = "https://github.com/JiangShuguo/zotero-memory"
 UPDATE_URL = (
     "https://raw.githubusercontent.com/JiangShuguo/zotero-memory/main/memory/updates.json"
@@ -143,6 +150,9 @@ def patch_zip_utf8_flags(path: Path):
 
 
 def check_package_version():
+    # When rebuilding an older XPI via MEMORY_VERSION, package.json may stay on tip.
+    if os.environ.get("MEMORY_VERSION"):
+        return
     package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
     if package.get("version") != VERSION:
         raise SystemExit(f"package.json version {package.get('version')} != {VERSION}")
@@ -152,7 +162,8 @@ def build():
     check_package_version()
     manifest_bytes = to_json(make_manifest())
     (ADDON / "manifest.json").write_bytes(manifest_bytes)
-    (ROOT / "updates.json").write_bytes(to_json(make_updates()))
+    if WRITE_UPDATES:
+        (ROOT / "updates.json").write_bytes(to_json(make_updates()))
 
     files = {"manifest.json": manifest_bytes}
     for name in ADDON_FILES:

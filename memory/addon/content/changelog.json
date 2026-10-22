@@ -7,6 +7,10 @@
         {
           "kind": "changed",
           "text": "Preferences UI is shown in Chinese"
+        },
+        {
+          "kind": "fixed",
+          "text": "Update check compares the highest version from GitHub raw, jsDelivr, and the latest release page"
         }
       ]
     },
@@ -16,7 +20,7 @@
       "changes": [
         {
           "kind": "fixed",
-          "text": "Update check reads GitHub raw updates.json and installs a newer build automatically"
+          "text": "Update check no longer trusts AddonManager's stale cache; it takes the newest version from multiple mirrors and installs via the XPI link"
         }
       ]
     },

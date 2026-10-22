@@ -29,7 +29,7 @@ export interface PaneHost {
 
 type UpdateState =
   | { kind: "idle" | "checking" | "latest" | "updating" | "updated" }
-  | { kind: "available"; latest: string }
+  | { kind: "available"; latest: string; updateLink?: string }
   | { kind: "error"; message: string };
 
 /** The Memory pane in Zotero's settings: options, backup buttons, update check and changelog. */
@@ -146,7 +146,7 @@ export class PreferencePane {
         this.checkedAt = Date.now();
         // Only trust a remote answer for "up to date". Local changelog alone can be stale.
         if (result.remote && result.latest && compareVersions(result.latest, VERSION) > 0) {
-          this.setUpdate({ kind: "available", latest: result.latest });
+          this.setUpdate({ kind: "available", latest: result.latest, updateLink: result.updateLink });
           // Install as soon as a newer build is found — no separate click.
           await this.install(result.latest, result.updateLink);
         } else if (result.remote) {
@@ -164,7 +164,10 @@ export class PreferencePane {
     return this.checking;
   }
 
-  private async install(latest = this.update.kind === "available" ? this.update.latest : undefined, updateLink?: string): Promise<void> {
+  private async install(
+    latest = this.update.kind === "available" ? this.update.latest : undefined,
+    updateLink = this.update.kind === "available" ? this.update.updateLink : undefined,
+  ): Promise<void> {
     if (!latest) return;
     this.setUpdate({ kind: "updating" });
     try {
@@ -175,7 +178,7 @@ export class PreferencePane {
     } catch (error) {
       logError(error);
     }
-    this.setUpdate({ kind: "available", latest });
+    this.setUpdate({ kind: "available", latest, updateLink });
     const release = this.releases.find((entry) => entry.version === latest);
     (Zotero as any).launchURL?.(release?.url ?? updateLink ?? RELEASES_PAGE);
   }

@@ -4,10 +4,13 @@ declare const ChromeUtils: { importESModule(path: string): any };
 
 export const RELEASES_PAGE = `https://github.com/${REPOSITORY}/releases`;
 
-/** Version sources: GitHub raw only. jsDelivr is not used for the version verdict (it can lag). */
-const UPDATES_URL = `https://raw.githubusercontent.com/${REPOSITORY}/main/memory/updates.json`;
+const UPDATES_URLS = [
+  `https://raw.githubusercontent.com/${REPOSITORY}/main/memory/updates.json`,
+  `https://cdn.jsdelivr.net/gh/${REPOSITORY}@main/memory/updates.json`,
+  `https://fastly.jsdelivr.net/gh/${REPOSITORY}@main/memory/updates.json`,
+];
 
-const CHANGELOG_MIRRORS = [
+const CHANGELOG_URLS = [
   `https://raw.githubusercontent.com/${REPOSITORY}/main/memory/addon/content/changelog.json`,
   `https://cdn.jsdelivr.net/gh/${REPOSITORY}@main/memory/addon/content/changelog.json`,
 ];
@@ -22,11 +25,8 @@ export interface ReleaseNote {
 }
 
 export interface UpdateCheck {
-  /** Newest version seen from a remote source. */
   latest?: string;
-  /** XPI download URL for `latest`, when known. */
   updateLink?: string;
-  /** True when at least one remote version source answered. */
   remote: boolean;
   releases: ReleaseNote[];
 }
@@ -35,28 +35,26 @@ const KINDS = new Set<ChangeKind>(["added", "changed", "fixed"]);
 
 /**
  * Checks for a newer version and loads the changelog.
- * The version verdict comes only from GitHub raw `updates.json` and Zotero's AddonManager.
+ * Takes the highest version from every source that answers (raw / jsDelivr / GitHub latest page).
+ * AddonManager is not used for the version verdict — its update cache is often stale.
  */
 export async function checkForUpdates(): Promise<UpdateCheck> {
-  const remoteVersions: string[] = [];
-  let updateLink: string | undefined;
+  const found: Array<{ version: string; link?: string }> = [];
 
-  const updates = await fetchJson(bust(UPDATES_URL));
-  const fromFile = versionFromUpdates(updates);
-  if (fromFile) {
-    remoteVersions.push(fromFile.version);
-    updateLink = fromFile.link;
+  const updateDocs = await Promise.all(UPDATES_URLS.map((url) => fetchJson(bust(url))));
+  for (const data of updateDocs) {
+    const entry = versionFromUpdates(data);
+    if (entry) found.push(entry);
   }
 
-  const fromManager = await latestFromAddonManager();
-  if (fromManager?.version) {
-    remoteVersions.push(fromManager.version);
-    updateLink = updateLink ?? fromManager.link;
-  }
+  const fromReleasePage = await latestFromGitHubLatestPage();
+  if (fromReleasePage) found.push(fromReleasePage);
+
+  const fromApi = await latestFromGitHubApi();
+  if (fromApi) found.push(fromApi);
 
   const remoteChangelogs: ReleaseNote[][] = [];
-  const changelogResults = await Promise.all(CHANGELOG_MIRRORS.map((url) => fetchJson(bust(url))));
-  for (const data of changelogResults) {
+  for (const data of await Promise.all(CHANGELOG_URLS.map((url) => fetchJson(bust(url))))) {
     if (!data) continue;
     const parsed = parseChangelog(data);
     if (parsed.length) remoteChangelogs.push(parsed);
@@ -64,40 +62,38 @@ export async function checkForUpdates(): Promise<UpdateCheck> {
 
   const local = parseChangelog(await fetchJson(`chrome://${CHROME_PACKAGE}/content/changelog.json`));
   const releases = mergeReleases(...remoteChangelogs, local);
-  const latest = remoteVersions.length
-    ? remoteVersions.reduce((best, next) => (compareVersions(next, best) > 0 ? next : best))
+
+  const latest = found.length
+    ? found.reduce((best, next) => (compareVersions(next.version, best.version) > 0 ? next : best))
     : undefined;
 
-  if (latest && updates) {
-    const match = Array.isArray(updates?.addons?.[ADDON_ID]?.updates)
-      ? updates.addons[ADDON_ID].updates.find((entry: any) => String(entry?.version ?? "") === latest)
-      : undefined;
-    if (match?.update_link) updateLink = String(match.update_link);
-  }
+  let updateLink = latest?.link;
   if (latest && !updateLink) {
-    updateLink = `https://github.com/${REPOSITORY}/releases/download/v${latest}/memory.xpi`;
+    updateLink = `https://github.com/${REPOSITORY}/releases/download/v${latest.version}/memory.xpi`;
   }
 
   return {
-    latest,
+    latest: latest?.version,
     updateLink,
-    remote: remoteVersions.length > 0,
+    remote: found.length > 0,
     releases,
   };
 }
 
 /**
- * Installs an update: first through Zotero's add-on manager, then by downloading the XPI URL.
+ * Installs an update. Prefers the known XPI URL — AddonManager's own update check is often stale.
  */
 export async function installUpdate(updateLink?: string): Promise<boolean> {
   const { AddonManager } = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
 
-  const viaManager = await installViaAddonManager(AddonManager);
-  if (viaManager) return true;
+  const link =
+    updateLink ||
+    (await checkForUpdates()).updateLink ||
+    `https://github.com/${REPOSITORY}/releases/latest/download/memory.xpi`;
 
-  const link = updateLink || (await checkForUpdates()).updateLink;
-  if (!link) return false;
-  return installFromUrl(AddonManager, link);
+  if (await installFromUrl(AddonManager, link)) return true;
+  if (await installViaAddonManager(AddonManager)) return true;
+  return false;
 }
 
 export function compareVersions(a: string, b: string): number {
@@ -127,43 +123,51 @@ function versionFromUpdates(data: any): { version: string; link?: string } | und
   return best;
 }
 
-function latestFromAddonManager(): Promise<{ version: string; link?: string } | undefined> {
-  return (async () => {
-    try {
-      const { AddonManager } = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
-      const addon = await AddonManager.getAddonByID(ADDON_ID);
-      if (!addon) return undefined;
-      return await new Promise((resolve) => {
-        let settled = false;
-        const done = (value?: { version: string; link?: string }) => {
-          if (settled) return;
-          settled = true;
-          resolve(value);
-        };
-        const timer = setTimeout(() => done(undefined), 12000);
-        addon.findUpdates(
-          {
-            onUpdateAvailable: (_addon: unknown, install: any) => {
-              clearTimeout(timer);
-              const version = String(install?.version ?? "").replace(/^v/i, "");
-              done(version ? { version, link: install?.sourceURI?.spec || install?.url } : undefined);
-            },
-            onNoUpdateAvailable: () => {
-              clearTimeout(timer);
-              done(undefined);
-            },
-            onUpdateFinished: () => {
-              clearTimeout(timer);
-              done(undefined);
-            },
-          },
-          AddonManager.UPDATE_WHEN_USER_REQUESTED,
-        );
-      });
-    } catch {
-      return undefined;
-    }
-  })();
+/** Follows GitHub's /releases/latest redirect and reads the tag from the final URL. */
+async function latestFromGitHubLatestPage(): Promise<{ version: string; link?: string } | undefined> {
+  try {
+    const xhr = await Zotero.HTTP.request("GET", `https://github.com/${REPOSITORY}/releases/latest`, {
+      headers: { Accept: "text/html", "Cache-Control": "no-cache", Pragma: "no-cache" },
+      responseType: "text",
+      timeout: 15000,
+      noCache: true,
+    } as any);
+    const finalUrl = String(
+      (xhr as any).channel?.URI?.spec ??
+        (xhr as any).channel?.currentURI?.spec ??
+        (xhr as any).responseURL ??
+        "",
+    );
+    const body = String((xhr as any).responseText ?? (xhr as any).response ?? "");
+    const match = /\/releases\/tag\/v?(\d+\.\d+\.\d+)/.exec(finalUrl) || /\/releases\/tag\/v?(\d+\.\d+\.\d+)/.exec(body);
+    if (!match?.[1]) return undefined;
+    const version = match[1];
+    return {
+      version,
+      link: `https://github.com/${REPOSITORY}/releases/download/v${version}/memory.xpi`,
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+async function latestFromGitHubApi(): Promise<{ version: string; link?: string } | undefined> {
+  try {
+    const data = await fetchJson(bust(`https://api.github.com/repos/${REPOSITORY}/releases/latest`));
+    const tag = String(data?.tag_name ?? "").replace(/^v/i, "");
+    if (!/^\d+\.\d+\.\d+$/.test(tag)) return undefined;
+    const asset = Array.isArray(data?.assets)
+      ? data.assets.find((item: any) => String(item?.name ?? "") === "memory.xpi")
+      : undefined;
+    return {
+      version: tag,
+      link: asset?.browser_download_url
+        ? String(asset.browser_download_url)
+        : `https://github.com/${REPOSITORY}/releases/download/v${tag}/memory.xpi`,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 async function installViaAddonManager(AddonManager: any): Promise<boolean> {
@@ -201,21 +205,17 @@ async function installViaAddonManager(AddonManager: any): Promise<boolean> {
 }
 
 async function installFromUrl(AddonManager: any, url: string): Promise<boolean> {
-  try {
-    const install = await AddonManager.getInstallForURL(url, "application/x-xpinstall");
-    if (!install) return false;
-    await install.install();
-    return true;
-  } catch {
+  for (const args of [[url, "application/x-xpinstall"], [url]] as const) {
     try {
-      const install = await AddonManager.getInstallForURL(url);
-      if (!install) return false;
+      const install = await AddonManager.getInstallForURL(...args);
+      if (!install) continue;
       await install.install();
       return true;
     } catch {
-      return false;
+      // try the next signature
     }
   }
+  return false;
 }
 
 function parseChangelog(data: any): ReleaseNote[] {
@@ -261,7 +261,7 @@ function mergeReleases(...lists: ReleaseNote[][]): ReleaseNote[] {
 
 function bust(url: string): string {
   const sep = url.includes("?") ? "&" : "?";
-  return `${url}${sep}t=${Date.now()}`;
+  return `${url}${sep}nocache=${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
 async function fetchJson(url: string): Promise<any | undefined> {
@@ -270,13 +270,14 @@ async function fetchJson(url: string): Promise<any | undefined> {
       headers: {
         Accept: "application/json",
         "Cache-Control": "no-cache",
+        Pragma: "no-cache",
       },
       responseType: "text",
       timeout: 15000,
       noCache: true,
     } as any);
     const text = String((xhr as any).responseText ?? (xhr as any).response ?? "");
-    if (!text.trim()) return undefined;
+    if (!text.trim() || text.trimStart().startsWith("<")) return undefined;
     return JSON.parse(text);
   } catch {
     return undefined;
