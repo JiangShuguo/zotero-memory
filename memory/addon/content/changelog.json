@@ -1,6 +1,16 @@
 {
   "releases": [
     {
+      "version": "1.4.1",
+      "date": "2026-10-22",
+      "changes": [
+        {
+          "kind": "fixed",
+          "text": "Update check no longer trusts a stale CDN copy; it picks the newest version from GitHub raw and other mirrors"
+        }
+      ]
+    },
+    {
       "version": "1.4.0",
       "date": "2026-10-22",
       "changes": [

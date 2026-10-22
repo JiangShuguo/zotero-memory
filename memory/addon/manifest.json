@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Memory",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "Comment cards beside Zotero PDF pages, kept in sync with annotation notes",
   "homepage_url": "https://github.com/JiangShuguo/zotero-memory",
   "author": "jsg",

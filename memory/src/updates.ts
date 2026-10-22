@@ -4,14 +4,15 @@ declare const ChromeUtils: { importESModule(path: string): any };
 
 export const RELEASES_PAGE = `https://github.com/${REPOSITORY}/releases`;
 
+/** Prefer GitHub raw (fresh); jsDelivr is a fallback and may lag behind. */
 const CHANGELOG_MIRRORS = [
-  `https://cdn.jsdelivr.net/gh/${REPOSITORY}@main/memory/addon/content/changelog.json`,
   `https://raw.githubusercontent.com/${REPOSITORY}/main/memory/addon/content/changelog.json`,
+  `https://cdn.jsdelivr.net/gh/${REPOSITORY}@main/memory/addon/content/changelog.json`,
 ];
 
 const UPDATES_MIRRORS = [
-  `https://cdn.jsdelivr.net/gh/${REPOSITORY}@main/memory/updates.json`,
   `https://raw.githubusercontent.com/${REPOSITORY}/main/memory/updates.json`,
+  `https://cdn.jsdelivr.net/gh/${REPOSITORY}@main/memory/updates.json`,
 ];
 
 export type ChangeKind = "added" | "changed" | "fixed";
@@ -23,33 +24,55 @@ export interface ReleaseNote {
   changes: Array<{ kind: ChangeKind; text: string }>;
 }
 
+export interface UpdateCheck {
+  /** Newest version seen from a remote source. */
+  latest?: string;
+  /** True when at least one remote mirror answered. */
+  remote: boolean;
+  releases: ReleaseNote[];
+}
+
 const KINDS = new Set<ChangeKind>(["added", "changed", "fixed"]);
 
 /**
- * Loads the changelog for the prefs pane.
- * Prefers a remote mirror (jsDelivr / raw.githubusercontent.com); falls back to the copy
- * bundled in the XPI so the list still works when GitHub API is unreachable.
+ * Checks for a newer version and loads the changelog.
+ * Remote mirrors are preferred for the version verdict; the bundled changelog is only a display fallback.
  */
-export async function fetchReleases(): Promise<{ releases: ReleaseNote[]; remote: boolean }> {
-  const remote = await fetchJsonFromMirrors(CHANGELOG_MIRRORS);
-  if (remote) return { releases: parseChangelog(remote), remote: true };
+export async function checkForUpdates(): Promise<UpdateCheck> {
+  const remoteVersions: string[] = [];
+  const remoteChangelogs: ReleaseNote[][] = [];
 
-  const local = await fetchJson(`chrome://${CHROME_PACKAGE}/content/changelog.json`);
-  if (local) return { releases: parseChangelog(local), remote: false };
+  const updateResults = await Promise.all(UPDATES_MIRRORS.map((url) => fetchJson(bust(url))));
+  for (const data of updateResults) {
+    const version = versionFromUpdates(data);
+    if (version) remoteVersions.push(version);
+  }
 
-  throw new Error("Could not load the changelog");
-}
+  const managerVersion = await latestFromAddonManager();
+  if (managerVersion) remoteVersions.push(managerVersion);
 
-/** Newest version listed in `updates.json`, or undefined when every mirror fails. */
-export async function fetchLatestVersion(): Promise<string | undefined> {
-  const data = await fetchJsonFromMirrors(UPDATES_MIRRORS);
-  const updates = data?.addons?.[ADDON_ID]?.updates;
-  if (!Array.isArray(updates) || !updates.length) return undefined;
-  return updates
-    .map((entry: any) => String(entry?.version ?? ""))
-    .filter(Boolean)
-    .sort(compareVersions)
-    .at(-1);
+  const changelogResults = await Promise.all(CHANGELOG_MIRRORS.map((url) => fetchJson(bust(url))));
+  for (const data of changelogResults) {
+    if (!data) continue;
+    const parsed = parseChangelog(data);
+    if (parsed.length) {
+      remoteChangelogs.push(parsed);
+      const top = parsed[0]?.version;
+      if (top) remoteVersions.push(top);
+    }
+  }
+
+  const local = parseChangelog(await fetchJson(`chrome://${CHROME_PACKAGE}/content/changelog.json`));
+  const releases = mergeReleases(...remoteChangelogs, local);
+  const latest = remoteVersions.length
+    ? remoteVersions.reduce((best, next) => (compareVersions(next, best) > 0 ? next : best))
+    : undefined;
+
+  return {
+    latest,
+    remote: remoteVersions.length > 0,
+    releases,
+  };
 }
 
 /**
@@ -85,7 +108,58 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
+function versionFromUpdates(data: any): string | undefined {
+  const updates = data?.addons?.[ADDON_ID]?.updates;
+  if (!Array.isArray(updates) || !updates.length) return undefined;
+  return updates
+    .map((entry: any) => String(entry?.version ?? "").replace(/^v/i, ""))
+    .filter(Boolean)
+    .reduce((best: string | undefined, next: string) =>
+      !best || compareVersions(next, best) > 0 ? next : best,
+    undefined);
+}
+
+/** Asks Zotero's own updater (same `update_url` as the XPI) for a newer build. */
+function latestFromAddonManager(): Promise<string | undefined> {
+  return (async () => {
+    try {
+      const { AddonManager } = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
+      const addon = await AddonManager.getAddonByID(ADDON_ID);
+      if (!addon) return undefined;
+      return await new Promise<string | undefined>((resolve) => {
+        let settled = false;
+        const done = (version?: string) => {
+          if (settled) return;
+          settled = true;
+          resolve(version);
+        };
+        const timer = setTimeout(() => done(undefined), 10000);
+        addon.findUpdates(
+          {
+            onUpdateAvailable: (_addon: unknown, install: any) => {
+              clearTimeout(timer);
+              done(String(install?.version ?? "").replace(/^v/i, "") || undefined);
+            },
+            onNoUpdateAvailable: () => {
+              clearTimeout(timer);
+              done(undefined);
+            },
+            onUpdateFinished: () => {
+              clearTimeout(timer);
+              done(undefined);
+            },
+          },
+          AddonManager.UPDATE_WHEN_USER_REQUESTED,
+        );
+      });
+    } catch {
+      return undefined;
+    }
+  })();
+}
+
 function parseChangelog(data: any): ReleaseNote[] {
+  if (!data) return [];
   const list = Array.isArray(data?.releases) ? data.releases : Array.isArray(data) ? data : [];
   return list
     .map((entry: any) => {
@@ -112,18 +186,31 @@ function parseChangelog(data: any): ReleaseNote[] {
     .sort((a: ReleaseNote, b: ReleaseNote) => compareVersions(b.version, a.version));
 }
 
-async function fetchJsonFromMirrors(urls: readonly string[]): Promise<any | undefined> {
-  for (const url of urls) {
-    const data = await fetchJson(url);
-    if (data !== undefined) return data;
+function mergeReleases(...lists: ReleaseNote[][]): ReleaseNote[] {
+  const byVersion = new Map<string, ReleaseNote>();
+  for (const list of lists) {
+    for (const release of list) {
+      const existing = byVersion.get(release.version);
+      if (!existing || release.changes.length > existing.changes.length) {
+        byVersion.set(release.version, release);
+      }
+    }
   }
-  return undefined;
+  return [...byVersion.values()].sort((a, b) => compareVersions(b.version, a.version));
+}
+
+function bust(url: string): string {
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}t=${Date.now()}`;
 }
 
 async function fetchJson(url: string): Promise<any | undefined> {
   try {
     const xhr = await Zotero.HTTP.request("GET", url, {
-      headers: { Accept: "application/json" },
+      headers: {
+        Accept: "application/json",
+        "Cache-Control": "no-cache",
+      },
       responseType: "text",
       timeout: 12000,
       noCache: true,

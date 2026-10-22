@@ -3,9 +3,8 @@ import { ANNOTATION_TYPES, type AnnotationType } from "../model/types";
 import { logError, type Settings } from "../settings";
 import {
   RELEASES_PAGE,
+  checkForUpdates,
   compareVersions,
-  fetchLatestVersion,
-  fetchReleases,
   installUpdate,
   type ChangeKind,
   type ReleaseNote,
@@ -142,14 +141,13 @@ export class PreferencePane {
     this.setUpdate({ kind: "checking" });
     this.checking = (async () => {
       try {
-        const { releases, remote } = await fetchReleases();
-        this.releases = releases;
+        const result = await checkForUpdates();
+        this.releases = result.releases;
         this.checkedAt = Date.now();
-        // Prefer updates.json when a mirror answers; otherwise use the newest changelog entry.
-        const latest = (await fetchLatestVersion()) ?? releases[0]?.version;
-        if (latest && compareVersions(latest, VERSION) > 0) {
-          this.setUpdate({ kind: "available", latest });
-        } else if (remote || releases.length) {
+        // Only trust a remote answer for "up to date". Local changelog alone can be stale.
+        if (result.remote && result.latest && compareVersions(result.latest, VERSION) > 0) {
+          this.setUpdate({ kind: "available", latest: result.latest });
+        } else if (result.remote) {
           this.setUpdate({ kind: "latest" });
         } else {
           this.setUpdate({ kind: "error", message: "Could not check for updates" });
