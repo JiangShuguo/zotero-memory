@@ -80,10 +80,13 @@ export async function checkForUpdates(): Promise<UpdateCheck> {
   };
 }
 
+export type UpdateProgress = (fraction: number | null) => void;
+
 /**
  * Installs an update. Prefers the known XPI URL — AddonManager's own update check is often stale.
+ * `onProgress` receives 0–1 when download size is known, otherwise `null` (indeterminate).
  */
-export async function installUpdate(updateLink?: string): Promise<boolean> {
+export async function installUpdate(updateLink?: string, onProgress?: UpdateProgress): Promise<boolean> {
   const { AddonManager } = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
 
   const link =
@@ -91,8 +94,9 @@ export async function installUpdate(updateLink?: string): Promise<boolean> {
     (await checkForUpdates()).updateLink ||
     `https://github.com/${REPOSITORY}/releases/latest/download/memory.xpi`;
 
-  if (await installFromUrl(AddonManager, link)) return true;
-  if (await installViaAddonManager(AddonManager)) return true;
+  onProgress?.(null);
+  if (await installFromUrl(AddonManager, link, onProgress)) return true;
+  if (await installViaAddonManager(AddonManager, onProgress)) return true;
   return false;
 }
 
@@ -170,7 +174,7 @@ async function latestFromGitHubApi(): Promise<{ version: string; link?: string }
   }
 }
 
-async function installViaAddonManager(AddonManager: any): Promise<boolean> {
+async function installViaAddonManager(AddonManager: any, onProgress?: UpdateProgress): Promise<boolean> {
   const addon = await AddonManager.getAddonByID(ADDON_ID);
   if (!addon) return false;
   const install = await new Promise<any>((resolve) => {
@@ -200,22 +204,56 @@ async function installViaAddonManager(AddonManager: any): Promise<boolean> {
     );
   });
   if (!install) return false;
-  await install.install();
-  return true;
+  return runInstall(install, onProgress);
 }
 
-async function installFromUrl(AddonManager: any, url: string): Promise<boolean> {
+async function installFromUrl(AddonManager: any, url: string, onProgress?: UpdateProgress): Promise<boolean> {
   for (const args of [[url, "application/x-xpinstall"], [url]] as const) {
     try {
       const install = await AddonManager.getInstallForURL(...args);
       if (!install) continue;
-      await install.install();
-      return true;
+      if (await runInstall(install, onProgress)) return true;
     } catch {
       // try the next signature
     }
   }
   return false;
+}
+
+async function runInstall(install: any, onProgress?: UpdateProgress): Promise<boolean> {
+  const listener = {
+    onDownloadStarted() {
+      onProgress?.(null);
+    },
+    onDownloadProgress(task: any) {
+      const max = Number(task?.maxProgress ?? task?.progressMax ?? 0);
+      const current = Number(task?.progress ?? 0);
+      if (max > 0 && Number.isFinite(current)) onProgress?.(Math.max(0, Math.min(1, current / max)));
+      else onProgress?.(null);
+    },
+    onDownloadEnded() {
+      onProgress?.(1);
+    },
+    onInstallStarted() {
+      onProgress?.(1);
+    },
+  };
+  try {
+    install.addListener?.(listener);
+  } catch {
+    // older AddonManager installs may not support listeners
+  }
+  try {
+    await install.install();
+    onProgress?.(1);
+    return true;
+  } finally {
+    try {
+      install.removeListener?.(listener);
+    } catch {
+      // ignore
+    }
+  }
 }
 
 function parseChangelog(data: any): ReleaseNote[] {

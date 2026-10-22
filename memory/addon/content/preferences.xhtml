@@ -13,9 +13,9 @@
                 <path d="M12.6 1.8v2.9H9.7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
             </html:button>
-            <html:span class="mem-update-status" data-mem-update-status=""></html:span>
             <html:span class="mem-update-version" data-mem-version=""></html:span>
-            <html:button type="button" class="mem-update-install" data-mem-action="install" hidden="hidden">安装更新</html:button>
+            <html:span class="mem-update-status" data-mem-update-status=""></html:span>
+            <html:button type="button" class="mem-update-install" data-mem-action="install" hidden="hidden">安装</html:button>
             <html:span class="mem-update-divider"></html:span>
             <html:button type="button" class="mem-changelog-toggle" data-mem-action="changelog" aria-expanded="false">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true">
@@ -29,7 +29,10 @@
             </html:button>
           </html:div>
         </html:div>
-        <html:p class="mem-hero-tagline">在 PDF 页边显示批注卡片，并与 Zotero 批注同步。</html:p>
+        <html:div class="mem-update-progress" data-mem-update-progress="" hidden="hidden" aria-hidden="true">
+          <html:div class="mem-update-progress-bar" data-mem-update-progress-bar=""></html:div>
+        </html:div>
+        <html:p class="mem-hero-tagline">在 PDF 页边显示批注卡片，并与 Zotero 批注保持同步。</html:p>
       </html:div>
     </html:div>
     <html:section class="mem-changelog" data-mem-changelog="" hidden="hidden" aria-label="更新日志">
@@ -48,7 +51,7 @@
   <html:section class="mem-panel" data-search-strings-raw="页边,批注,高亮,下划线,便签,文本,图片,区域">
     <html:div class="mem-panel-head">
       <html:h2 class="mem-panel-title">显示卡片</html:h2>
-      <html:p class="mem-panel-hint">打开的 PDF 会立即生效。</html:p>
+      <html:p class="mem-panel-hint">对当前打开的 PDF 立即生效。</html:p>
     </html:div>
     <html:div class="mem-chips">
       <html:label class="mem-chip">
@@ -74,16 +77,16 @@
     </html:div>
   </html:section>
 
-  <html:section class="mem-panel" data-search-strings-raw="导出,导入,备份,还原,批注">
+  <html:section class="mem-panel" data-search-strings-raw="导出,导入,备份,批量,还原,批注">
     <html:div class="mem-panel-head">
-      <html:h2 class="mem-panel-title">备份</html:h2>
+      <html:h2 class="mem-panel-title">批量备份</html:h2>
       <html:p class="mem-panel-hint">
-        导出当前选中 PDF 上的全部批注。导入时若文件不同（如官网版与 arXiv 版、修改过的 PDF），会按文字重新定位，无法定位的批注会列出提示。
+        将当前选中条目的批注导出为备份文件；导入时按 PDF 文件名或条目题名匹配目标附件。文件不一致时按文本重新定位，无法定位的批注将列入报告。
       </html:p>
     </html:div>
     <html:div class="mem-actions">
-      <html:button type="button" data-mem-action="export">导出批注…</html:button>
-      <html:button type="button" data-mem-action="import">导入批注…</html:button>
+      <html:button type="button" data-mem-action="batch-export">批量导出…</html:button>
+      <html:button type="button" data-mem-action="batch-import">批量导入…</html:button>
     </html:div>
   </html:section>
 </vbox>

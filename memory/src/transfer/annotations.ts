@@ -29,6 +29,7 @@ export interface AnnotationBackup {
   pdf: {
     md5: string;
     filename: string;
+    title?: string;
     pageCount?: number;
   };
   annotations: AnnotationPayload[];
@@ -66,16 +67,26 @@ export interface ImportResult {
   created: number;
 }
 
+function parentTitle(attachment: any): string | undefined {
+  try {
+    const parent = attachment.parentItem ?? (attachment.parentID ? (Zotero as any).Items.get(attachment.parentID) : undefined);
+    const title = String(parent?.getField?.("title") ?? "").trim();
+    return title || undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function pdfMd5(attachment: any): Promise<string> {
   const path = await attachment.getFilePathAsync?.();
   if (!path) throw new Error("找不到该 PDF 文件。");
   const hash = await (Zotero as any).Utilities.Internal.md5Async(path);
-  if (!hash) throw new Error("无法计算该 PDF 的校验值。");
+  if (!hash) throw new Error("无法计算 PDF 校验值。");
   return String(hash);
 }
 
 export async function buildBackup(attachment: any): Promise<AnnotationBackup> {
-  if (!attachment?.isPDFAttachment?.()) throw new Error("请先选中一个 PDF 附件。");
+  if (!attachment?.isPDFAttachment?.()) throw new Error("目标不是 PDF 附件。");
   const md5 = await pdfMd5(attachment);
   const annotations: AnnotationPayload[] = [];
   for (const item of attachment.getAnnotations?.(false) ?? []) {
@@ -103,6 +114,7 @@ export async function buildBackup(attachment: any): Promise<AnnotationBackup> {
     pdf: {
       md5,
       filename: String(attachment.attachmentFilename || attachment.getField?.("title") || "document.pdf"),
+      title: parentTitle(attachment),
       pageCount,
     },
     annotations,
@@ -114,13 +126,13 @@ export function parseBackup(raw: string): AnnotationBackup {
   try {
     data = JSON.parse(raw);
   } catch {
-    throw new Error("这不是有效的 Memory 标注备份文件。");
+    throw new Error("无法解析 Memory 标注备份文件。");
   }
   if (!data || data.format !== BACKUP_FORMAT || !READABLE_VERSIONS.has(data.version)) {
-    throw new Error("这不是 Memory 标注备份。");
+    throw new Error("文件不是有效的 Memory 标注备份。");
   }
   if (!data.pdf?.md5 || !Array.isArray(data.annotations)) {
-    throw new Error("这份 Memory 标注备份不完整。");
+    throw new Error("Memory 标注备份内容不完整。");
   }
   return data as AnnotationBackup;
 }
@@ -130,7 +142,7 @@ export function parseBackup(raw: string): AnnotationBackup {
  * Identical files restore as-is; otherwise each annotation is found again by its text.
  */
 export async function planImport(attachment: any, backup: AnnotationBackup): Promise<ImportPlan> {
-  if (!attachment?.isPDFAttachment?.()) throw new Error("请先选中一个 PDF 附件。");
+  if (!attachment?.isPDFAttachment?.()) throw new Error("目标不是 PDF 附件。");
   const exact = (await pdfMd5(attachment)) === backup.pdf.md5;
   const plan: ImportPlan = { exact, items: [], duplicates: 0, approximate: [], failed: [] };
   const existing = existingFingerprints(attachment);
@@ -219,9 +231,9 @@ function relocate(index: DocIndex, payload: AnnotationPayload, sourcePageCount?:
 
   if (TEXT_TYPES.has(payload.type) && payload.text?.trim()) {
     const match = locateText(index, payload.text, hint);
-    if (!match) return { reason: "目标 PDF 中找不到这段文字" };
+    if (!match) return { reason: "目标 PDF 中未找到对应文本" };
     const placement = placeText(index, match, payload.text);
-    if (!placement) return { reason: "这段文字在目标 PDF 中跨越多页" };
+    if (!placement) return { reason: "对应文本在目标 PDF 中跨越多页" };
     const position: Record<string, any> = { ...payload.position, ...placement.position };
     if (!placement.position.nextPageRects) delete position.nextPageRects;
     return {
@@ -237,14 +249,14 @@ function relocate(index: DocIndex, payload: AnnotationPayload, sourcePageCount?:
   }
 
   const original = referencePoint(payload.position);
-  if (!original) return { reason: "无法读取这条批注的位置" };
+  if (!original) return { reason: "无法读取批注位置" };
   const anchor = payload.anchor;
   if (anchor?.context) {
     const found = locatePoint(index, anchor as PointAnchor, { ...hint, prefix: undefined, suffix: undefined });
-    if (!found) return { reason: "目标 PDF 中找不到批注旁边的文字" };
+    if (!found) return { reason: "目标 PDF 中未找到批注邻近文本" };
     return { approximate: false, payload: moveTo(index, payload, found.pageIndex, original, found.point, found.charIndex) };
   }
-  if (pageIndex >= index.doc.pageCount) return { reason: `目标 PDF 没有第 ${pageIndex + 1} 页` };
+  if (pageIndex >= index.doc.pageCount) return { reason: `目标 PDF 缺少第 ${pageIndex + 1} 页` };
   return { approximate: true, payload: moveTo(index, payload, pageIndex, original, original, 0) };
 }
 

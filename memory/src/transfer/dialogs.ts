@@ -11,6 +11,10 @@ export function chooseBackupOpenPath(): Promise<string | undefined> {
   return pickFile("导入 Memory 标注", "open");
 }
 
+export function chooseBackupFolder(title: string): Promise<string | undefined> {
+  return pickFolder(title);
+}
+
 export function alertUser(title: string, message: string): void {
   const win = mainWindow();
   if (win?.Services?.prompt) {
@@ -60,6 +64,16 @@ async function pickFile(title: string, mode: "open" | "save", defaultName?: stri
   const result = await fp.show();
   const accepted = result === fp.returnOK || (mode === "save" && result === fp.returnReplace);
   return accepted ? String(fp.file) : undefined;
+}
+
+async function pickFolder(title: string): Promise<string | undefined> {
+  const { FilePicker } = ChromeUtils.importESModule("chrome://zotero/content/modules/filePicker.mjs") as any;
+  const fp = new FilePicker();
+  const win = mainWindow();
+  if (!win) throw new Error("没有打开的 Zotero 窗口。");
+  fp.init(win, title, fp.modeGetFolder);
+  const result = await fp.show();
+  return result === fp.returnOK ? String(fp.file) : undefined;
 }
 
 function mainWindow(): any {

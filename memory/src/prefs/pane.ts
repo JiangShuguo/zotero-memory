@@ -23,16 +23,17 @@ const CHANGE_LABELS: Record<ChangeKind, string> = {
 export interface PaneHost {
   settings(): Settings;
   setKind(kind: AnnotationType, visible: boolean): void;
-  exportAnnotations(): void;
-  importAnnotations(): void;
+  batchExportAnnotations(): void;
+  batchImportAnnotations(): void;
 }
 
 type UpdateState =
-  | { kind: "idle" | "checking" | "latest" | "updating" | "updated" }
+  | { kind: "idle" | "checking" | "latest" | "updated" }
   | { kind: "available"; latest: string; updateLink?: string }
+  | { kind: "updating"; latest: string; progress: number | null }
   | { kind: "error"; message: string };
 
-/** The Memory pane in Zotero's settings: options, backup buttons, update check and changelog. */
+/** The Memory pane in Zotero's settings: options, batch backup, update check and changelog. */
 export class PreferencePane {
   private readonly documents = new Set<Document>();
   private paneID?: string;
@@ -86,8 +87,8 @@ export class PreferencePane {
     });
 
     const actions: Record<string, () => void> = {
-      export: () => this.host.exportAnnotations(),
-      import: () => this.host.importAnnotations(),
+      "batch-export": () => this.host.batchExportAnnotations(),
+      "batch-import": () => this.host.batchImportAnnotations(),
       check: () => void this.check(true),
       install: () => void this.install(),
       changelog: () => this.toggleChangelog(root),
@@ -108,7 +109,14 @@ export class PreferencePane {
 
     this.sync();
     this.render();
-    if (Date.now() - this.checkedAt > RECHECK_AFTER_MS) void this.check(false);
+    if (
+      this.update.kind !== "updated" &&
+      this.update.kind !== "available" &&
+      this.update.kind !== "updating" &&
+      Date.now() - this.checkedAt > RECHECK_AFTER_MS
+    ) {
+      void this.check(false);
+    }
   }
 
   /** Mirrors the current settings into every open pane. */
@@ -137,7 +145,9 @@ export class PreferencePane {
 
   private check(force: boolean): Promise<void> {
     if (this.checking) return this.checking;
-    if (!force && this.update.kind === "available") return Promise.resolve();
+    if (!force && (this.update.kind === "available" || this.update.kind === "updated" || this.update.kind === "updating")) {
+      return Promise.resolve();
+    }
     this.setUpdate({ kind: "checking" });
     this.checking = (async () => {
       try {
@@ -167,9 +177,14 @@ export class PreferencePane {
     updateLink = this.update.kind === "available" ? this.update.updateLink : undefined,
   ): Promise<void> {
     if (!latest) return;
-    this.setUpdate({ kind: "updating" });
+    this.setUpdate({ kind: "updating", latest, progress: null });
     try {
-      if (await installUpdate(updateLink)) {
+      if (
+        await installUpdate(updateLink, (fraction) => {
+          if (this.update.kind !== "updating") return;
+          this.setUpdate({ kind: "updating", latest, progress: fraction });
+        })
+      ) {
         this.setUpdate({ kind: "updated" });
         return;
       }
@@ -201,6 +216,8 @@ export class PreferencePane {
     const version = root.querySelector<HTMLElement>("[data-mem-version]");
     const install = root.querySelector<HTMLButtonElement>('[data-mem-action="install"]');
     const check = root.querySelector<HTMLButtonElement>('[data-mem-action="check"]');
+    const progress = root.querySelector<HTMLElement>("[data-mem-update-progress]");
+    const bar = root.querySelector<HTMLElement>("[data-mem-update-progress-bar]");
     if (version) version.textContent = `v${VERSION}`;
     if (!status) return;
     const state = this.update;
@@ -208,20 +225,34 @@ export class PreferencePane {
       idle: "",
       checking: "检查中…",
       latest: "已是最新",
-      available: state.kind === "available" ? `有可用更新：v${state.latest}` : "",
-      updating: "正在安装更新…",
-      updated: "更新已安装；重启 Zotero 以应用",
+      available: "有可用更新",
+      updating: "正在安装…",
+      updated: "已安装，请重启 Zotero",
       error: state.kind === "error" ? state.message : "",
     };
     status.textContent = text[state.kind];
     status.dataset.state = state.kind;
     if (install) {
       install.hidden = state.kind !== "available";
-      if (state.kind === "available") install.textContent = `安装更新 v${state.latest}`;
+      if (state.kind === "available") install.textContent = `安装 v${state.latest}`;
     }
     if (check) {
-      check.disabled = state.kind === "checking" || state.kind === "updating";
-      check.classList.toggle("mem-spinning", state.kind === "checking" || state.kind === "updating");
+      check.disabled = state.kind === "checking" || state.kind === "updating" || state.kind === "updated";
+      check.classList.toggle("mem-spinning", state.kind === "checking");
+    }
+    if (progress && bar) {
+      const showing = state.kind === "updating";
+      progress.hidden = !showing;
+      progress.setAttribute("aria-hidden", String(!showing));
+      if (showing) {
+        const fraction = state.progress;
+        const determinate = typeof fraction === "number" && Number.isFinite(fraction);
+        progress.dataset.indeterminate = determinate ? "false" : "true";
+        bar.style.width = determinate ? `${Math.max(0, Math.min(1, fraction)) * 100}%` : "";
+      } else {
+        delete progress.dataset.indeterminate;
+        bar.style.width = "";
+      }
     }
   }
 
@@ -233,7 +264,7 @@ export class PreferencePane {
     if (show === !panel.hidden) return;
     panel.hidden = !show;
     toggle?.setAttribute("aria-expanded", String(show));
-    if (show && !this.releases.length) void this.check(true);
+    if (show && !this.releases.length && this.update.kind !== "updated") void this.check(true);
   }
 
   private renderChangelog(root: HTMLElement): void {

@@ -5,7 +5,13 @@ import { ReaderSession } from "./reader/session";
 import { TOOLBAR_CSS, TOOLBAR_STYLE_ID } from "./reader/styles";
 import { logError, readSettings, writeEnabled, writeKind, type Settings } from "./settings";
 import { NoteStore } from "./store";
-import { addItemMenu, exportAnnotations, importAnnotations } from "./transfer/actions";
+import {
+  addItemMenu,
+  batchExportAnnotations,
+  batchImportAnnotations,
+  exportAnnotations,
+  importAnnotations,
+} from "./transfer/actions";
 import { isLiveReader } from "./transfer/pdf-text";
 
 const BUTTON_CLASS = "mem-toolbar-toggle";
@@ -26,8 +32,8 @@ export class MemoryPlugin {
   private readonly pane = new PreferencePane({
     settings: () => this.settings,
     setKind: (kind, visible) => this.setKind(kind, visible),
-    exportAnnotations: () => void exportAnnotations(),
-    importAnnotations: () => void this.importAnnotations(),
+    batchExportAnnotations: () => void batchExportAnnotations(),
+    batchImportAnnotations: () => void this.batchImportAnnotations(),
   });
   private settings: Settings = readSettings();
   private notifierID?: string;
@@ -141,6 +147,10 @@ export class MemoryPlugin {
 
   private importAnnotations(): Promise<void> {
     return importAnnotations(() => this.refreshSessions());
+  }
+
+  private batchImportAnnotations(): Promise<void> {
+    return batchImportAnnotations(() => this.refreshSessions());
   }
 
   private bindItemMenu(win: Window): void {

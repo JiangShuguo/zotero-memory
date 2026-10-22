@@ -1,6 +1,24 @@
 {
   "releases": [
     {
+      "version": "1.5.2",
+      "date": "2026-10-22",
+      "changes": [
+        {
+          "kind": "changed",
+          "text": "Preferences update controls are quieter; install progress is shown, and a successful install stops further update checks until restart"
+        },
+        {
+          "kind": "added",
+          "text": "Preferences can batch-export selected PDFs and batch-import a folder of backups matched by filename or item title"
+        },
+        {
+          "kind": "changed",
+          "text": "Preferences copy is more formal; single-PDF export and import remain on the item context menu"
+        }
+      ]
+    },
+    {
       "version": "1.5.1",
       "date": "2026-10-22",
       "changes": [
