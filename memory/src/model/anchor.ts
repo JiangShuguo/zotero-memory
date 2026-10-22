@@ -9,13 +9,6 @@ import {
 
 const KNOWN_TYPES = new Set<string>(ANNOTATION_TYPES);
 
-// Zotero stores a note as a 22pt box and paints a 24pt icon from its top-left.
-// The compact icon is 14pt, centred on that same 24pt box.
-const NOTE_BOX = 22;
-const NOTE_ICON = 24;
-const COMPACT_ICON = 14;
-const COMPACT_SHIFT = (NOTE_ICON - COMPACT_ICON) / 2;
-
 export function isAnnotationType(value: unknown): value is AnnotationType {
   return typeof value === "string" && KNOWN_TYPES.has(value);
 }
@@ -68,32 +61,6 @@ export function anchorOnPage(position: PdfPointBox, viewport: ViewportBox): Page
     viewport,
   );
 }
-
-export function compactNoteAnchor(position: PdfPointBox, viewport: ViewportBox): PageAnchor | undefined {
-  const rect = position.rects?.find((candidate) => candidate.length >= 4);
-  if (!rect) return anchorOnPage(position, viewport);
-  const box = pdfRectToViewport(rect, viewport);
-  const unitX = (box.right - box.left) / NOTE_BOX;
-  const unitY = (box.bottom - box.top) / NOTE_BOX;
-  if (!(unitX > 0) || !(unitY > 0)) return anchorOnPage(position, viewport);
-  const left = box.left + COMPACT_SHIFT * unitX;
-  const top = box.top + COMPACT_SHIFT * unitY;
-  return sideAnchor(
-    {
-      left,
-      top,
-      right: left + COMPACT_ICON * unitX,
-      bottom: top + COMPACT_ICON * unitY,
-    },
-    viewport,
-  );
-}
-
-export const COMPACT_NOTE = {
-  icon: NOTE_ICON,
-  compact: COMPACT_ICON,
-  shift: COMPACT_SHIFT,
-};
 
 interface Bounds {
   left: number;

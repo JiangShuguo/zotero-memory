@@ -237,10 +237,6 @@ export function textLength(rich: RichText): number {
   return length;
 }
 
-export function plainText(rich: RichText): string {
-  return rich.map((line) => line.runs.map((run) => run.text).join("")).join("\n");
-}
-
 // ---------------------------------------------------------------------------
 // Stored comment <-> model
 

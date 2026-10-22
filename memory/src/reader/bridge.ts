@@ -1,6 +1,5 @@
 import { logError } from "../settings";
 import type { ViewportBox } from "../model/types";
-import { compactNotesScript } from "./compact-notes";
 import { NATIVE_HOVER_CSS, NATIVE_HOVER_STYLE_ID } from "./styles";
 
 export interface PdfPage {
@@ -28,7 +27,6 @@ export class PdfBridge {
   private primaryView?: AnyRecord;
   private readonly cleanups: Cleanup[] = [];
   private hoveredNodes: Element[] = [];
-  private compactNotes = false;
   private stateHooked = false;
   private readonly selectionCallbacks: Array<(ids: string[]) => void> = [];
   private readonly popupCallbacks: Array<(ids: string[]) => void> = [];
@@ -79,10 +77,7 @@ export class PdfBridge {
   onGeometryChange(callback: (reason: string) => void): void {
     const bus = this.pdfWindow?.PDFViewerApplication?.eventBus;
     for (const name of ["pagerendered", "scalechanging", "rotationchanging", "updateviewarea", "pagesloaded"]) {
-      const run = () => {
-        if (name === "pagerendered" && this.compactNotes) this.applyCompactNotes();
-        callback(name);
-      };
+      const run = () => callback(name);
       bus?.on?.(name, run);
       this.cleanups.push(() => bus?.off?.(name, run));
     }
@@ -186,11 +181,6 @@ export class PdfBridge {
     root.classList.toggle(POPUP_HIDDEN_CLASS, hidden);
   }
 
-  setCompactNotes(enabled: boolean): void {
-    this.compactNotes = enabled;
-    this.applyCompactNotes();
-  }
-
   frame(callback: () => void): Cleanup {
     const pdfWindow = this.pdfWindow;
     if (pdfWindow && typeof pdfWindow.requestAnimationFrame === "function") {
@@ -211,7 +201,6 @@ export class PdfBridge {
     this.popupCallbacks.length = 0;
     this.visibilityCallbacks.length = 0;
     this.stateHooked = false;
-    if (this.compactNotes) this.setCompactNotes(false);
     for (const cleanup of this.cleanups.splice(0)) {
       try {
         cleanup();
@@ -354,16 +343,6 @@ export class PdfBridge {
       (annotation: AnyRecord) => `${String(annotation?.id ?? annotation?.key ?? "")}:${annotation?._hidden ? 1 : 0}`,
     );
     return `${state?.showAnnotations !== false ? 1 : 0}:${parts.join("|")}`;
-  }
-
-  private applyCompactNotes(): void {
-    const readerWindow = this.reader?._iframeWindow as (Window & AnyRecord) | undefined;
-    if (typeof readerWindow?.eval !== "function") return;
-    try {
-      readerWindow.eval(compactNotesScript(this.compactNotes));
-    } catch (error) {
-      logError(error);
-    }
   }
 
   private ensureHoverStyle(): void {

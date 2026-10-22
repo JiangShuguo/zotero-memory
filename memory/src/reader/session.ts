@@ -1,4 +1,4 @@
-import { anchorOnPage, compactNoteAnchor, noteShouldShow } from "../model/anchor";
+import { anchorOnPage, noteShouldShow } from "../model/anchor";
 import type { MarginNote, PageAnchor } from "../model/types";
 import { logError, type Settings } from "../settings";
 import type { NoteStore } from "../store";
@@ -84,10 +84,8 @@ export class ReaderSession {
   }
 
   setSettings(settings: Settings): void {
-    const compactChanged = settings.compactNotes !== this.settings.compactNotes;
     this.settings = settings;
     if (!this.ready) return;
-    if (compactChanged) this.bridge.setCompactNotes(settings.compactNotes);
     this.paint();
   }
 
@@ -140,7 +138,6 @@ export class ReaderSession {
       this.syncPopup(ids);
     });
     this.bridge.onAnnotationPopup((ids) => this.syncPopupHold(ids));
-    if (this.settings.compactNotes) this.bridge.setCompactNotes(true);
     this.refresh();
     this.syncPopupHold(this.bridge.annotationPopupIDs());
   }
@@ -236,10 +233,7 @@ export class ReaderSession {
   }
 
   private anchorFor(note: MarginNote, page: PdfPage, overlay: PageOverlay): PageAnchor | undefined {
-    const anchor =
-      this.settings.compactNotes && note.type === "note"
-        ? compactNoteAnchor(note.position, page.viewport)
-        : anchorOnPage(note.position, page.viewport);
+    const anchor = anchorOnPage(note.position, page.viewport);
     if (!anchor) return undefined;
     const { width, height } = overlay.size();
     const scaleX = page.viewport.width > 0 ? width / page.viewport.width : 1;

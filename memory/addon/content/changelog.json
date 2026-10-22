@@ -1,0 +1,114 @@
+{
+  "releases": [
+    {
+      "version": "1.4.0",
+      "date": "2026-10-22",
+      "changes": [
+        {
+          "kind": "added",
+          "text": "Preferences show the installed version, check for updates, and list the changelog"
+        },
+        {
+          "kind": "changed",
+          "text": "Redesigned the preferences layout and controls"
+        },
+        {
+          "kind": "changed",
+          "text": "Removed Smaller note icons"
+        }
+      ]
+    },
+    {
+      "version": "1.3.0",
+      "date": "2026-10-22",
+      "changes": [
+        {
+          "kind": "added",
+          "text": "Change annotation color from the edit toolbar"
+        }
+      ]
+    },
+    {
+      "version": "1.2.0",
+      "date": "2026-10-14",
+      "changes": [
+        {
+          "kind": "added",
+          "text": "Export and import PDF annotation backups; restore all highlights, underlines, and margin comments only when the target PDF is identical"
+        }
+      ]
+    },
+    {
+      "version": "1.1.2",
+      "date": "2026-10-12",
+      "changes": [
+        {
+          "kind": "changed",
+          "text": "When margin cards no longer fit, scroll the column instead of using Show all / Collapse"
+        }
+      ]
+    },
+    {
+      "version": "1.1.1",
+      "date": "2026-10-12",
+      "changes": [
+        {
+          "kind": "fixed",
+          "text": "While writing a new comment in Zotero's annotation popup, wait until the popup is closed before showing the margin card"
+        }
+      ]
+    },
+    {
+      "version": "1.1.0",
+      "date": "2026-10-12",
+      "changes": [
+        {
+          "kind": "added",
+          "text": "In-card scrolling for long comments; card height follows the text up to about nine lines"
+        },
+        {
+          "kind": "added",
+          "text": "Scrollbar tinted with the annotation color—dim when idle, bright while scrolling"
+        },
+        {
+          "kind": "added",
+          "text": "Drag to select card text for copy (Ctrl/Cmd+C); click to edit"
+        },
+        {
+          "kind": "changed",
+          "text": "Hide Zotero's annotation popup when a margin card is already shown; annotations without a card still use the built-in popup"
+        },
+        {
+          "kind": "changed",
+          "text": "Comments display in full by default (no three-line clamp)"
+        }
+      ]
+    },
+    {
+      "version": "1.0.0",
+      "date": "2026-10-12",
+      "changes": [
+        {
+          "kind": "added",
+          "text": "Comment cards in the PDF margins, with leaders pointing to the marks"
+        },
+        {
+          "kind": "added",
+          "text": "In-place editing with bold / italic / underline / strikethrough, super/subscript, sizes, and lists"
+        },
+        {
+          "kind": "added",
+          "text": "Format toolbar only while editing; card border uses the annotation color"
+        },
+        {
+          "kind": "added",
+          "text": "Toolbar toggle, annotation context menu, and annotation type filters"
+        },
+        {
+          "kind": "added",
+          "text": "Compatible with Zotero 7.x – 10.*"
+        }
+      ]
+    }
+  ]
+}

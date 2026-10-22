@@ -1,21 +1,15 @@
-import { ADDON_ID, ADDON_NAME, CHROME_PACKAGE } from "./constants";
-import { ANNOTATION_TYPES, type AnnotationType } from "./model/types";
+import { ADDON_ID } from "./constants";
+import type { AnnotationType } from "./model/types";
+import { PreferencePane } from "./prefs/pane";
 import { ReaderSession } from "./reader/session";
 import { TOOLBAR_CSS, TOOLBAR_STYLE_ID } from "./reader/styles";
-import { logError, readSettings, writeCompactNotes, writeEnabled, writeKind, type Settings } from "./settings";
+import { logError, readSettings, writeEnabled, writeKind, type Settings } from "./settings";
 import { NoteStore } from "./store";
-import { buildBackup, importBackup, parseBackup } from "./transfer/annotations";
-import { alertUser, chooseBackupOpenPath, chooseBackupSavePath } from "./transfer/dialogs";
+import { addItemMenu, exportAnnotations, importAnnotations } from "./transfer/actions";
 
-const PANE_ID = "zotero-prefpane-memory";
 const BUTTON_CLASS = "mem-toolbar-toggle";
 const FALLBACK_SECTION_CLASS = "mem-fallback-section";
 const FALLBACK_BUTTON_DELAY_MS = 350;
-const ITEM_MENU_IDS = {
-  separator: "mem-itemmenu-separator",
-  export: "mem-itemmenu-export",
-  import: "mem-itemmenu-import",
-} as const;
 
 const BUTTON_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true">
   <rect x="2.2" y="3" width="11" height="18" rx="1.2" fill="none" stroke="currentColor" stroke-width="1.5"/>
@@ -28,9 +22,13 @@ const BUTTON_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true">
 export class MemoryPlugin {
   private readonly store = new NoteStore();
   private readonly sessions = new Map<object, ReaderSession>();
-  private readonly preferenceDocuments = new Set<Document>();
+  private readonly pane = new PreferencePane({
+    settings: () => this.settings,
+    setKind: (kind, visible) => this.setKind(kind, visible),
+    exportAnnotations: () => void exportAnnotations(),
+    importAnnotations: () => void this.importAnnotations(),
+  });
   private settings: Settings = readSettings();
-  private paneID?: string;
   private notifierID?: string;
   private running = false;
   private readonly itemMenuCleanups: Array<() => void> = [];
@@ -39,7 +37,7 @@ export class MemoryPlugin {
     if (this.running) return;
     this.running = true;
     this.settings = readSettings();
-    await this.registerPane();
+    await this.pane.register();
     const readers = (Zotero as any).Reader;
     readers.registerEventListener("renderToolbar", this.onRenderToolbar, ADDON_ID);
     readers.registerEventListener("createAnnotationContextMenu", this.onAnnotationMenu, ADDON_ID);
@@ -62,15 +60,7 @@ export class MemoryPlugin {
     for (const cleanup of this.itemMenuCleanups.splice(0)) cleanup();
     for (const session of this.sessions.values()) session.destroy();
     this.sessions.clear();
-    this.preferenceDocuments.clear();
-    if (this.paneID) {
-      try {
-        (Zotero as any).PreferencePanes?.unregister?.(this.paneID);
-      } catch (error) {
-        logError(error);
-      }
-      this.paneID = undefined;
-    }
+    this.pane.unregister();
     for (const reader of readers?._readers ?? []) removeToolbarButtons(reader?._iframeWindow?.document);
   }
 
@@ -82,33 +72,7 @@ export class MemoryPlugin {
 
   /** Called by the preference pane once it has loaded. */
   bindPreferences(win: Window): void {
-    const root = win.document.getElementById(PANE_ID);
-    if (!root) return;
-    this.preferenceDocuments.add(win.document);
-    root.querySelectorAll<HTMLInputElement>("[data-mem-type]").forEach((box) => {
-      const kind = box.dataset.memType as AnnotationType | undefined;
-      if (!kind || !ANNOTATION_TYPES.includes(kind) || box.dataset.memBound === "true") return;
-      box.dataset.memBound = "true";
-      box.addEventListener("command", () => this.setKind(kind, box.checked));
-      box.addEventListener("change", () => this.setKind(kind, box.checked));
-    });
-    const compact = root.querySelector<HTMLInputElement>('[data-mem-setting="compact-notes"]');
-    if (compact && compact.dataset.memBound !== "true") {
-      compact.dataset.memBound = "true";
-      compact.addEventListener("command", () => this.setCompactNotes(compact.checked));
-      compact.addEventListener("change", () => this.setCompactNotes(compact.checked));
-    }
-    const exportBtn = root.querySelector<HTMLButtonElement>('[data-mem-action="export"]');
-    if (exportBtn && exportBtn.dataset.memBound !== "true") {
-      exportBtn.dataset.memBound = "true";
-      exportBtn.addEventListener("click", () => void this.exportAnnotations());
-    }
-    const importBtn = root.querySelector<HTMLButtonElement>('[data-mem-action="import"]');
-    if (importBtn && importBtn.dataset.memBound !== "true") {
-      importBtn.dataset.memBound = "true";
-      importBtn.addEventListener("click", () => void this.importAnnotations());
-    }
-    this.syncPreferences();
+    this.pane.bind(win);
   }
 
   // -------------------------------------------------------------------------
@@ -135,7 +99,7 @@ export class MemoryPlugin {
     notify: (event: string, type: string) => {
       this.dropClosedReaders();
       if (type !== "item" || !["add", "modify", "delete", "trash"].includes(event)) return;
-      for (const session of this.sessions.values()) session.refresh();
+      this.refreshSessions();
     },
   };
 
@@ -157,10 +121,26 @@ export class MemoryPlugin {
     }
   }
 
+  private refreshSessions(): void {
+    for (const session of this.sessions.values()) session.refresh();
+  }
+
   private async reveal(reader: any, keys: string[]): Promise<void> {
     if (!this.settings.enabled) this.setEnabled(true);
     const session = await this.session(reader);
     await session?.reveal(keys);
+  }
+
+  private importAnnotations(): Promise<void> {
+    return importAnnotations(() => this.refreshSessions());
+  }
+
+  private bindItemMenu(win: Window): void {
+    const cleanup = addItemMenu(win, {
+      export: () => void exportAnnotations(),
+      import: () => void this.importAnnotations(),
+    });
+    if (cleanup) this.itemMenuCleanups.push(cleanup);
   }
 
   private setEnabled(enabled: boolean): void {
@@ -177,34 +157,11 @@ export class MemoryPlugin {
     this.applySettings({ ...this.settings, kinds });
   }
 
-  private setCompactNotes(enabled: boolean): void {
-    if (this.settings.compactNotes === enabled) return;
-    writeCompactNotes(enabled);
-    this.applySettings({ ...this.settings, compactNotes: enabled });
-  }
-
   private applySettings(settings: Settings): void {
     this.settings = settings;
     for (const session of this.sessions.values()) session.setSettings(settings);
     this.syncButtons();
-    this.syncPreferences();
-  }
-
-  private async registerPane(): Promise<void> {
-    const panes = (Zotero as any).PreferencePanes;
-    if (!panes?.register) return;
-    try {
-      this.paneID = await panes.register({
-        pluginID: ADDON_ID,
-        id: "memory-preferences",
-        label: ADDON_NAME,
-        src: `chrome://${CHROME_PACKAGE}/content/preferences.xhtml`,
-        image: `chrome://${CHROME_PACKAGE}/content/icons/icon.png`,
-        stylesheets: [`chrome://${CHROME_PACKAGE}/content/preferences.css`],
-      });
-    } catch (error) {
-      logError(error);
-    }
+    this.pane.sync();
   }
 
   private makeButton(doc: Document): HTMLButtonElement {
@@ -250,22 +207,6 @@ export class MemoryPlugin {
     button.setAttribute("aria-label", button.title);
   }
 
-  private syncPreferences(): void {
-    for (const doc of [...this.preferenceDocuments]) {
-      const root = doc.getElementById(PANE_ID);
-      if (!root) {
-        this.preferenceDocuments.delete(doc);
-        continue;
-      }
-      root.querySelectorAll<HTMLInputElement>("[data-mem-type]").forEach((box) => {
-        const kind = box.dataset.memType as AnnotationType | undefined;
-        if (kind) box.checked = this.settings.kinds.has(kind);
-      });
-      const compact = root.querySelector<HTMLInputElement>('[data-mem-setting="compact-notes"]');
-      if (compact) compact.checked = this.settings.compactNotes;
-    }
-  }
-
   private dropClosedReaders(): void {
     const live = new Set<object>((Zotero as any).Reader?._readers ?? []);
     for (const [reader, session] of this.sessions) {
@@ -274,126 +215,6 @@ export class MemoryPlugin {
       this.sessions.delete(reader);
     }
   }
-
-  private bindItemMenu(win: Window): void {
-    const doc = win.document;
-    const menu = doc.getElementById("zotero-itemmenu");
-    if (!menu || menu.getAttribute("data-mem-bound") === "true") return;
-    menu.setAttribute("data-mem-bound", "true");
-
-    const separator = createXul(doc, "menuseparator");
-    separator.id = ITEM_MENU_IDS.separator;
-    const exportItem = createXul(doc, "menuitem");
-    exportItem.id = ITEM_MENU_IDS.export;
-    exportItem.setAttribute("label", "导出标注备份…");
-    const importItem = createXul(doc, "menuitem");
-    importItem.id = ITEM_MENU_IDS.import;
-    importItem.setAttribute("label", "导入标注备份…");
-
-    const onExport = () => void this.exportAnnotations();
-    const onImport = () => void this.importAnnotations();
-    const onShowing = () => {
-      const enabled = Boolean(resolvePdfAttachment());
-      exportItem.setAttribute("disabled", enabled ? "false" : "true");
-      importItem.setAttribute("disabled", enabled ? "false" : "true");
-    };
-
-    exportItem.addEventListener("command", onExport);
-    importItem.addEventListener("command", onImport);
-    menu.addEventListener("popupshowing", onShowing);
-    menu.append(separator, exportItem, importItem);
-
-    this.itemMenuCleanups.push(() => {
-      menu.removeEventListener("popupshowing", onShowing);
-      exportItem.removeEventListener("command", onExport);
-      importItem.removeEventListener("command", onImport);
-      separator.remove();
-      exportItem.remove();
-      importItem.remove();
-      menu.removeAttribute("data-mem-bound");
-    });
-  }
-
-  private async exportAnnotations(): Promise<void> {
-    try {
-      const attachment = resolvePdfAttachment();
-      if (!attachment) {
-        alertUser("Memory", "请先选中一个 PDF 附件（或打开该 PDF）。");
-        return;
-      }
-      const backup = await buildBackup(attachment);
-      const stem = String(attachment.attachmentFilename || "annotations").replace(/\.pdf$/i, "");
-      const path = await chooseBackupSavePath(`${stem}-memory-annotations.json`);
-      if (!path) return;
-      await (Zotero as any).File.putContentsAsync(path, JSON.stringify(backup, null, 2));
-      alertUser("Memory", `已导出 ${backup.annotations.length} 条批注。`);
-    } catch (error) {
-      logError(error);
-      alertUser("Memory", errorMessage(error));
-    }
-  }
-
-  private async importAnnotations(): Promise<void> {
-    try {
-      const attachment = resolvePdfAttachment();
-      if (!attachment) {
-        alertUser("Memory", "请先选中要还原到的 PDF 附件（或打开该 PDF）。");
-        return;
-      }
-      const path = await chooseBackupOpenPath();
-      if (!path) return;
-      const raw = await (Zotero as any).File.getContentsAsync(path);
-      const backup = parseBackup(String(raw));
-      const result = await importBackup(attachment, backup);
-      for (const session of this.sessions.values()) session.refresh();
-      alertUser(
-        "Memory",
-        `已导入 ${result.created} 条批注` + (result.skipped ? `，跳过 ${result.skipped} 条已存在或无效条目` : "") + "。",
-      );
-    } catch (error) {
-      logError(error);
-      alertUser("Memory", errorMessage(error));
-    }
-  }
-}
-
-function createXul(doc: Document, name: string): XULElement {
-  const create = (doc as any).createXULElement?.bind(doc) as ((tag: string) => XULElement) | undefined;
-  if (create) return create(name);
-  return doc.createElementNS("http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul", name) as XULElement;
-}
-
-function resolvePdfAttachment(): any | undefined {
-  const pane = (Zotero as any).getActiveZoteroPane?.();
-  for (const item of pane?.getSelectedItems?.() ?? []) {
-    const pdf = asPdfAttachment(item);
-    if (pdf) return pdf;
-  }
-  for (const reader of (Zotero as any).Reader?._readers ?? []) {
-    if (!isPdf(reader)) continue;
-    const item = (Zotero as any).Items?.get?.(reader.itemID);
-    const pdf = asPdfAttachment(item);
-    if (pdf) return pdf;
-  }
-  return undefined;
-}
-
-function asPdfAttachment(item: any): any | undefined {
-  if (!item) return undefined;
-  if (item.isPDFAttachment?.()) return item;
-  if (item.isAttachment?.() && String(item.attachmentContentType || "").includes("pdf")) return item;
-  if (!item.isRegularItem?.()) return undefined;
-  const ids: number[] = item.getAttachments?.() ?? [];
-  for (const id of ids) {
-    const child = (Zotero as any).Items.get(id);
-    if (child?.isPDFAttachment?.()) return child;
-  }
-  return undefined;
-}
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error && error.message) return error.message;
-  return String(error ?? "Unknown error");
 }
 
 function removeToolbarButtons(doc: Document | undefined): void {

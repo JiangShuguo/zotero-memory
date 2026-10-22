@@ -4,4 +4,3 @@ pref("extensions.zotero.memory.types.underline", true);
 pref("extensions.zotero.memory.types.note", true);
 pref("extensions.zotero.memory.types.text", true);
 pref("extensions.zotero.memory.types.image", true);
-pref("extensions.zotero.memory.compactNoteIcons", false);

@@ -1,75 +1,442 @@
 #zotero-prefpane-memory {
-  max-width: 720px;
+  --mem-accent: var(--accent-blue, #3f6fe0);
+  --mem-good: var(--accent-green, #2f9e5b);
+  --mem-warn: var(--accent-orange, #d97a1e);
+  --mem-bad: var(--accent-red, #d3443c);
+  --mem-line: color-mix(in srgb, currentColor 13%, transparent);
+  --mem-soft: color-mix(in srgb, currentColor 5%, transparent);
+  --mem-muted: color-mix(in srgb, currentColor 62%, transparent);
+  max-width: 760px;
+  gap: 12px;
 }
 
-#zotero-prefpane-memory .mem-prefs-heading {
-  margin: 0 0 6px;
+#zotero-prefpane-memory h1,
+#zotero-prefpane-memory h2,
+#zotero-prefpane-memory p {
+  margin: 0;
 }
 
-#zotero-prefpane-memory .mem-prefs-description {
-  max-width: 620px;
-  margin-bottom: 8px;
-  color: color-mix(in srgb, currentColor 68%, transparent);
-  line-height: 1.5;
-}
-
-#zotero-prefpane-memory .mem-prefs-types {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(160px, 1fr));
-  gap: 4px 18px;
-  max-width: 520px;
-}
-
-#zotero-prefpane-memory .mem-prefs-row,
-#zotero-prefpane-memory .mem-prefs-option {
-  display: flex;
-  gap: 9px;
-  align-items: center;
-  min-height: 32px;
-  padding: 4px 6px;
-  border-radius: 8px;
+#zotero-prefpane-memory button {
   cursor: pointer;
 }
 
-#zotero-prefpane-memory .mem-prefs-option {
+#zotero-prefpane-memory svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+}
+
+/* Header ------------------------------------------------------------------ */
+
+#zotero-prefpane-memory .mem-hero {
+  position: relative;
+  padding: 14px 16px;
+  border: 1px solid var(--mem-line);
+  border-radius: 12px;
+  background: linear-gradient(135deg, color-mix(in srgb, var(--mem-accent) 9%, transparent), var(--mem-soft));
+}
+
+#zotero-prefpane-memory .mem-hero-top {
+  display: flex;
   align-items: flex-start;
-  max-width: 620px;
+  gap: 12px;
 }
 
-#zotero-prefpane-memory .mem-prefs-row:hover,
-#zotero-prefpane-memory .mem-prefs-option:hover {
-  background: color-mix(in srgb, currentColor 7%, transparent);
+#zotero-prefpane-memory .mem-hero-icon {
+  width: 36px;
+  height: 36px;
+  margin-top: 1px;
+  border-radius: 8px;
 }
 
-#zotero-prefpane-memory input {
-  margin: 2px 0 0;
-}
-
-#zotero-prefpane-memory .mem-prefs-option span {
+#zotero-prefpane-memory .mem-hero-main {
+  flex: 1;
+  min-width: 0;
   display: grid;
-  gap: 3px;
+  gap: 4px;
 }
 
-#zotero-prefpane-memory small {
-  color: color-mix(in srgb, currentColor 68%, transparent);
-  line-height: 1.45;
+#zotero-prefpane-memory .mem-hero-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 26px;
 }
 
-#zotero-prefpane-memory .mem-prefs-actions {
+#zotero-prefpane-memory .mem-hero-title {
+  font-size: 1.2em;
+  font-weight: 650;
+  line-height: 1.2;
+}
+
+#zotero-prefpane-memory .mem-hero-tagline {
+  color: var(--mem-muted);
+  line-height: 1.4;
+}
+
+#zotero-prefpane-memory .mem-update {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  white-space: nowrap;
+}
+
+#zotero-prefpane-memory .mem-icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--mem-muted);
+  appearance: none;
+}
+
+#zotero-prefpane-memory .mem-icon-button:hover:not(:disabled) {
+  background: color-mix(in srgb, currentColor 10%, transparent);
+  color: inherit;
+}
+
+#zotero-prefpane-memory .mem-icon-button.mem-spinning svg {
+  animation: mem-spin 0.9s linear infinite;
+}
+
+@keyframes mem-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+#zotero-prefpane-memory .mem-update-status {
+  font-size: 0.92em;
+  font-weight: 550;
+}
+
+#zotero-prefpane-memory .mem-update-status:empty {
+  display: none;
+}
+
+#zotero-prefpane-memory .mem-update-status[data-state="latest"],
+#zotero-prefpane-memory .mem-update-status[data-state="updated"] {
+  color: var(--mem-good);
+}
+
+#zotero-prefpane-memory .mem-update-status[data-state="latest"]::before {
+  content: "✓ ";
+}
+
+#zotero-prefpane-memory .mem-update-status[data-state="available"] {
+  color: var(--mem-warn);
+}
+
+#zotero-prefpane-memory .mem-update-status[data-state="error"] {
+  color: var(--mem-bad);
+}
+
+#zotero-prefpane-memory .mem-update-status[data-state="checking"],
+#zotero-prefpane-memory .mem-update-status[data-state="updating"] {
+  color: var(--mem-muted);
+  font-weight: normal;
+}
+
+#zotero-prefpane-memory .mem-update-version {
+  color: var(--mem-muted);
+  font-size: 0.92em;
+  font-variant-numeric: tabular-nums;
+}
+
+#zotero-prefpane-memory .mem-update-install {
+  margin: 0;
+  padding: 1px 9px;
+  border: none;
+  border-radius: 999px;
+  background: var(--mem-accent);
+  color: #fff;
+  appearance: none;
+}
+
+#zotero-prefpane-memory .mem-update-divider {
+  width: 1px;
+  height: 14px;
+  background: var(--mem-line);
+}
+
+#zotero-prefpane-memory .mem-changelog-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0;
+  padding: 2px 6px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--mem-accent);
+  font-size: 0.92em;
+  appearance: none;
+}
+
+#zotero-prefpane-memory .mem-changelog-toggle:hover {
+  background: color-mix(in srgb, var(--mem-accent) 10%, transparent);
+}
+
+#zotero-prefpane-memory .mem-chevron {
+  width: 12px;
+  height: 12px;
+  transition: transform 0.15s ease;
+}
+
+#zotero-prefpane-memory .mem-changelog-toggle[aria-expanded="true"] .mem-chevron {
+  transform: rotate(180deg);
+}
+
+/* Changelog ------------------------------------------------------------- */
+
+#zotero-prefpane-memory .mem-changelog {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 10;
+  width: min(380px, calc(100% - 8px));
+  max-height: min(220px, 42vh);
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--mem-line);
+  border-radius: 10px;
+  background: var(--material-background, Field);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.14);
+}
+
+#zotero-prefpane-memory .mem-changelog[hidden] {
+  display: none;
+}
+
+#zotero-prefpane-memory .mem-changelog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  padding: 8px 10px 8px 14px;
+  border-bottom: 1px solid var(--mem-line);
+}
+
+#zotero-prefpane-memory .mem-changelog-head h2 {
+  font-size: 0.98em;
+  font-weight: 600;
+}
+
+#zotero-prefpane-memory .mem-changelog-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 2px 14px 10px;
+}
+
+#zotero-prefpane-memory .mem-changelog-empty {
+  padding: 12px 0 4px;
+  color: var(--mem-muted);
+}
+
+#zotero-prefpane-memory .mem-release {
+  padding: 9px 0;
+}
+
+#zotero-prefpane-memory .mem-release + .mem-release {
+  border-top: 1px dashed var(--mem-line);
+}
+
+#zotero-prefpane-memory .mem-release-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 5px;
+}
+
+#zotero-prefpane-memory .mem-release-version {
+  font-weight: 600;
+  font-size: 0.95em;
+}
+
+#zotero-prefpane-memory .mem-release-date {
+  margin-inline-start: auto;
+  color: var(--mem-muted);
+  font-size: 0.88em;
+  font-variant-numeric: tabular-nums;
+}
+
+#zotero-prefpane-memory .mem-badge {
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 0.8em;
+}
+
+#zotero-prefpane-memory .mem-badge-current {
+  background: color-mix(in srgb, var(--mem-good) 15%, transparent);
+  color: var(--mem-good);
+}
+
+#zotero-prefpane-memory .mem-badge-new {
+  background: color-mix(in srgb, var(--mem-warn) 15%, transparent);
+  color: var(--mem-warn);
+}
+
+#zotero-prefpane-memory .mem-release-changes {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+#zotero-prefpane-memory .mem-release-changes li {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 0.92em;
+  line-height: 1.4;
+}
+
+#zotero-prefpane-memory .mem-tag {
+  flex: none;
+  min-width: 52px;
+  padding: 0 5px;
+  border-radius: 4px;
+  font-size: 0.82em;
+  font-weight: 600;
+  text-align: center;
+}
+
+#zotero-prefpane-memory .mem-tag-added {
+  background: color-mix(in srgb, var(--mem-accent) 13%, transparent);
+  color: var(--mem-accent);
+}
+
+#zotero-prefpane-memory .mem-tag-changed {
+  background: color-mix(in srgb, #8a5cd6 14%, transparent);
+  color: #8a5cd6;
+}
+
+#zotero-prefpane-memory .mem-tag-fixed {
+  background: color-mix(in srgb, var(--mem-good) 14%, transparent);
+  color: var(--mem-good);
+}
+
+/* Option panels ----------------------------------------------------------- */
+
+#zotero-prefpane-memory .mem-panel {
+  display: grid;
+  gap: 10px;
+  padding: 12px 16px;
+  border: 1px solid var(--mem-line);
+  border-radius: 12px;
+}
+
+#zotero-prefpane-memory .mem-panel-head {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+}
+
+#zotero-prefpane-memory .mem-panel-title {
+  font-size: 1em;
+  font-weight: 600;
+}
+
+#zotero-prefpane-memory .mem-panel-hint {
+  color: var(--mem-muted);
+  font-size: 0.92em;
+  line-height: 1.4;
+}
+
+#zotero-prefpane-memory .mem-chips {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+#zotero-prefpane-memory .mem-chip {
+  position: relative;
+  min-width: 0;
+  cursor: pointer;
+}
+
+#zotero-prefpane-memory .mem-chip input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+#zotero-prefpane-memory .mem-chip span {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 7px 10px;
+  border: 1px solid var(--mem-line);
+  border-radius: 8px;
+  color: var(--mem-muted);
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+
+#zotero-prefpane-memory .mem-chip span::before {
+  content: "";
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+}
+
+#zotero-prefpane-memory .mem-chip:hover span {
+  background: var(--mem-soft);
+}
+
+#zotero-prefpane-memory .mem-chip input:checked + span {
+  border-color: color-mix(in srgb, var(--mem-accent) 45%, transparent);
+  background: color-mix(in srgb, var(--mem-accent) 11%, transparent);
+  color: var(--mem-accent);
+}
+
+#zotero-prefpane-memory .mem-chip input:checked + span::before {
+  background: currentColor;
+}
+
+#zotero-prefpane-memory .mem-chip input:focus-visible + span {
+  outline: 2px solid var(--mem-accent);
+  outline-offset: 1px;
+}
+
+#zotero-prefpane-memory .mem-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 8px;
 }
 
-#zotero-prefpane-memory .mem-prefs-actions button {
+#zotero-prefpane-memory .mem-actions button {
   min-height: 30px;
-  padding: 4px 12px;
-  cursor: pointer;
+  margin: 0;
+  padding: 4px 14px;
 }
 
-@media (max-width: 620px) {
-  #zotero-prefpane-memory .mem-prefs-types {
-    grid-template-columns: 1fr;
+@media (max-width: 560px) {
+  #zotero-prefpane-memory .mem-hero-row {
+    flex-wrap: wrap;
+  }
+
+  #zotero-prefpane-memory .mem-update {
+    width: 100%;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  #zotero-prefpane-memory .mem-chips {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }

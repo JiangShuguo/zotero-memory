@@ -60,7 +60,7 @@ Shortcut keys while editing: Ctrl/Cmd+B / I / U for bold, italic, and underline;
 | Hover | Hovering a card highlights the matching annotation on the page |
 | Selection | Selecting an annotation highlights its card |
 | Native popup | Used to write a new comment; hidden once a margin card is shown |
-| Preferences | Choose which annotation types appear, and optionally draw smaller note icons |
+| Preferences | Choose which annotation types appear; shows the installed version, checks for updates, and lists the changelog |
 | Export / import | Item menu or Preferences backs up all annotations on a PDF; import restores them only when the target PDF is byte-identical |
 
 Comments are stored in Zotero’s annotation comment field.

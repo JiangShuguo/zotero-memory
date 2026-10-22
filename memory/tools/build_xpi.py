@@ -13,7 +13,7 @@ ADDON = ROOT / "addon"
 BUILD = ROOT / "build"
 OUT = BUILD / "memory.xpi"
 ADDON_ID = "memory@jsg.local"
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 HOMEPAGE = "https://github.com/JiangShuguo/zotero-memory"
 UPDATE_URL = (
     "https://raw.githubusercontent.com/JiangShuguo/zotero-memory/main/memory/updates.json"
@@ -29,6 +29,7 @@ ADDON_FILES = (
     "prefs.js",
     "content/preferences.xhtml",
     "content/preferences.css",
+    "content/changelog.json",
     "content/icons/icon.png",
     "content/icons/icon@2x.png",
 )
@@ -104,6 +105,7 @@ def bundle() -> bytes:
             "--charset=utf8",
             "--legal-comments=none",
             "--log-level=warning",
+            f"--define:__MEMORY_VERSION__={json.dumps(VERSION)}",
         ],
         cwd=ROOT,
         capture_output=True,

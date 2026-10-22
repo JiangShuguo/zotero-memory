@@ -4,7 +4,6 @@ import { ANNOTATION_TYPES, type AnnotationType } from "./model/types";
 export interface Settings {
   enabled: boolean;
   kinds: ReadonlySet<AnnotationType>;
-  compactNotes: boolean;
 }
 
 export function readSettings(): Settings {
@@ -15,7 +14,6 @@ export function readSettings(): Settings {
   return {
     enabled: readBool("enabled", true),
     kinds,
-    compactNotes: readBool("compactNoteIcons", false),
   };
 }
 
@@ -25,10 +23,6 @@ export function writeEnabled(enabled: boolean): void {
 
 export function writeKind(kind: AnnotationType, visible: boolean): void {
   writeBool(`types.${kind}`, visible);
-}
-
-export function writeCompactNotes(enabled: boolean): void {
-  writeBool("compactNoteIcons", enabled);
 }
 
 function readBool(key: string, fallback: boolean): boolean {
