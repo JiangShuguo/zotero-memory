@@ -11,6 +11,11 @@ export function chooseBackupOpenPath(): Promise<string | undefined> {
   return pickFile("导入 Memory 标注", "open");
 }
 
+/** Multi-select JSON backups for batch import. */
+export function chooseBackupOpenPaths(): Promise<string[] | undefined> {
+  return pickFiles("选择 Memory 标注备份", "JSON", "*.json");
+}
+
 export function chooseBackupFolder(title: string): Promise<string | undefined> {
   return pickFolder(title);
 }
@@ -64,6 +69,19 @@ async function pickFile(title: string, mode: "open" | "save", defaultName?: stri
   const result = await fp.show();
   const accepted = result === fp.returnOK || (mode === "save" && result === fp.returnReplace);
   return accepted ? String(fp.file) : undefined;
+}
+
+async function pickFiles(title: string, filterName: string, filterMask: string): Promise<string[] | undefined> {
+  const { FilePicker } = ChromeUtils.importESModule("chrome://zotero/content/modules/filePicker.mjs") as any;
+  const fp = new FilePicker();
+  const win = mainWindow();
+  if (!win) throw new Error("没有打开的 Zotero 窗口。");
+  fp.init(win, title, fp.modeOpenMultiple);
+  fp.appendFilter(filterName, filterMask);
+  const result = await fp.show();
+  if (result !== fp.returnOK) return undefined;
+  const files = Array.isArray(fp.files) ? fp.files.map(String) : [];
+  return files.length ? files : undefined;
 }
 
 async function pickFolder(title: string): Promise<string | undefined> {

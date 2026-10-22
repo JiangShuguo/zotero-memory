@@ -8,6 +8,7 @@ import {
   type ImportPlan,
   type ProblemEntry,
 } from "./annotations";
+import { chooseJsonFilesForImport, choosePdfsForExport, type ImportMatchRow } from "./batch-ui";
 import {
   alertUser,
   chooseBackupFolder,
@@ -87,15 +88,23 @@ export async function importAnnotations(onImported: () => void): Promise<void> {
   }
 }
 
-/** Exports backups for every PDF among the current library selection into a folder. */
+/** Opens a collection-folded PDF picker, then writes backups into a chosen folder. */
 export async function batchExportAnnotations(): Promise<void> {
   try {
-    const attachments = resolveSelectedPdfAttachments();
-    if (!attachments.length) {
-      alertUser("Memory", "请先在文献库中选中包含 PDF 附件的条目。");
+    const ids = await choosePdfsForExport();
+    if (ids === undefined) return;
+    if (!ids.length) {
+      alertUser("Memory", "文库中没有可导出的 PDF。");
       return;
     }
-    const folder = await chooseBackupFolder("选择批量导出目录");
+    const attachments = ids
+      .map((id) => (Zotero as any).Items.get(id))
+      .filter((item: any) => item?.isPDFAttachment?.());
+    if (!attachments.length) {
+      alertUser("Memory", "所选条目中没有有效的 PDF 附件。");
+      return;
+    }
+    const folder = await chooseBackupFolder("选择导出目录");
     if (!folder) return;
     const done = showProgress(`正在导出 ${attachments.length} 个 PDF…`);
     let exported = 0;
@@ -128,38 +137,67 @@ export async function batchExportAnnotations(): Promise<void> {
 }
 
 /**
- * Imports every Memory backup JSON in a folder, matching each to a library PDF by
- * filename or parent item title. Prefer currently selected PDFs when multiple match.
+ * Opens a multi-file import dialog; matches each backup to a library PDF by
+ * filename or parent item title, then imports the matched set.
  */
 export async function batchImportAnnotations(onImported: () => void): Promise<void> {
   try {
-    const folder = await chooseBackupFolder("选择批量导入目录");
-    if (!folder) return;
-    const files = await listJsonFiles(folder);
-    if (!files.length) {
-      alertUser("Memory", "所选目录中没有 JSON 备份文件。");
-      return;
-    }
-
     const preferred = new Set(resolveSelectedPdfAttachments().map((item) => item.id));
     const catalog = await buildPdfCatalog();
-    const unmatched: string[] = [];
-    const ambiguous: string[] = [];
-    const planned: Array<{
-      label: string;
-      attachment: any;
-      plan: ImportPlan;
-    }> = [];
-    const fileFailures: string[] = [];
+    const previewCache = new Map<string, { backup?: AnnotationBackup; match?: { attachment: any; ambiguous: boolean }; error?: string }>();
 
-    const close = showProgress(`正在匹配 ${files.length} 个备份文件…`);
-    try {
-      for (const path of files) {
-        const fileLabel = basename(path);
+    const files = await chooseJsonFilesForImport(async (paths) => {
+      const rows: ImportMatchRow[] = [];
+      for (const path of paths) {
+        const fileName = basename(path);
         try {
           const raw = await (Zotero as any).File.getContentsAsync(path);
           const backup = parseBackup(String(raw));
           const match = matchAttachment(backup, catalog, preferred);
+          previewCache.set(path, { backup, match });
+          if (!match) {
+            rows.push({ path, fileName, status: "unmatched", message: "未找到匹配的 PDF（文件名或题名）" });
+            continue;
+          }
+          rows.push({
+            path,
+            fileName,
+            status: "matched",
+            targetLabel: displayName(match.attachment) + (match.ambiguous ? "（多个匹配，已选用其一）" : ""),
+          });
+        } catch (error) {
+          logError(error);
+          const message = errorMessage(error);
+          previewCache.set(path, { error: message });
+          rows.push({ path, fileName, status: "error", message });
+        }
+      }
+      return rows;
+    });
+    if (files === undefined) return;
+    if (!files.length) {
+      alertUser("Memory", "没有可导入的匹配项。");
+      return;
+    }
+
+    const unmatched: string[] = [];
+    const ambiguous: string[] = [];
+    const planned: Array<{ label: string; attachment: any; plan: ImportPlan }> = [];
+    const fileFailures: string[] = [];
+
+    const close = showProgress(`正在准备导入 ${files.length} 个备份…`);
+    try {
+      for (const path of files) {
+        const fileLabel = basename(path);
+        try {
+          let cached = previewCache.get(path);
+          if (!cached?.backup) {
+            const raw = await (Zotero as any).File.getContentsAsync(path);
+            const backup = parseBackup(String(raw));
+            cached = { backup, match: matchAttachment(backup, catalog, preferred) };
+          }
+          const backup = cached.backup!;
+          const match = cached.match ?? matchAttachment(backup, catalog, preferred);
           if (!match) {
             unmatched.push(`• ${fileLabel}：未找到匹配的 PDF（文件名或题名）`);
             continue;
@@ -229,10 +267,10 @@ export function addItemMenu(win: Window, actions: { export(): void; import(): vo
   separator.id = ITEM_MENU_IDS.separator;
   const exportItem = createXul(doc, "menuitem");
   exportItem.id = ITEM_MENU_IDS.export;
-  exportItem.setAttribute("label", "导出标注备份…");
+  exportItem.setAttribute("label", "导出标注备份");
   const importItem = createXul(doc, "menuitem");
   importItem.id = ITEM_MENU_IDS.import;
-  importItem.setAttribute("label", "导入标注备份…");
+  importItem.setAttribute("label", "导入标注备份");
 
   const onExport = () => actions.export();
   const onImport = () => actions.import();
@@ -401,13 +439,6 @@ function joinPath(folder: string, name: string): string {
 
 function basename(path: string): string {
   return path.replace(/^.*[\\/]/, "");
-}
-
-async function listJsonFiles(folder: string): Promise<string[]> {
-  const IOUtils = (globalThis as any).IOUtils;
-  if (!IOUtils?.getChildren) throw new Error("无法读取目录内容。");
-  const children: string[] = await IOUtils.getChildren(folder);
-  return children.filter((path) => /\.json$/i.test(path)).sort();
 }
 
 function planSummary(plan: ImportPlan): string {

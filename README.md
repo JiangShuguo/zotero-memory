@@ -61,7 +61,7 @@ Shortcut keys while editing: Ctrl/Cmd+B / I / U for bold, italic, and underline;
 | Selection | Selecting an annotation highlights its card |
 | Native popup | Used to write a new comment; hidden once a margin card is shown |
 | Preferences | Choose which annotation types appear; shows the installed version, checks for updates, and lists the changelog |
-| Export / import | Item menu backs up one PDF; Preferences can batch-export the selection and batch-import a folder of backups matched by PDF filename or item title. Same-file restores are direct; different files are matched by text, and unplaced annotations are listed before writing |
+| Export / import | Item menu backs up one PDF; Preferences open a dialog to pick PDFs by collection (export) or multiple JSON backups matched by filename / item title (import). Same-file restores are direct; different files are matched by text, and unplaced annotations are listed before writing |
 
 Comments are stored in Zotero’s annotation comment field.
 

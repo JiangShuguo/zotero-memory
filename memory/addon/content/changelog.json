@@ -1,6 +1,20 @@
 {
   "releases": [
     {
+      "version": "1.5.3",
+      "date": "2026-10-22",
+      "changes": [
+        {
+          "kind": "changed",
+          "text": "Batch export opens a dialog to pick PDFs by collection; batch import lets you choose multiple JSON backups"
+        },
+        {
+          "kind": "changed",
+          "text": "Removed trailing ellipses from export and import button labels"
+        }
+      ]
+    },
+    {
       "version": "1.5.2",
       "date": "2026-10-22",
       "changes": [
