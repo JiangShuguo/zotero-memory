@@ -25,6 +25,30 @@ export function alertUser(title: string, message: string): void {
   }
 }
 
+export function confirmUser(title: string, message: string): boolean {
+  const win = mainWindow();
+  const prompt = win?.Services?.prompt ?? (Services as any).prompt;
+  try {
+    return Boolean(prompt.confirm(win ?? null, title, message));
+  } catch {
+    // eslint-disable-next-line no-alert
+    return confirm(`${title}\n\n${message}`);
+  }
+}
+
+/** A small non-modal "working…" popup; returns its closer. */
+export function showProgress(message: string): () => void {
+  try {
+    const progress = new (Zotero as any).ProgressWindow({ closeOnClick: false });
+    progress.changeHeadline("Memory");
+    progress.addDescription(message);
+    progress.show();
+    return () => progress.close();
+  } catch {
+    return () => undefined;
+  }
+}
+
 async function pickFile(title: string, mode: "open" | "save", defaultName?: string): Promise<string | undefined> {
   const { FilePicker } = ChromeUtils.importESModule("chrome://zotero/content/modules/filePicker.mjs") as any;
   const fp = new FilePicker();

@@ -147,8 +147,6 @@ export class PreferencePane {
         // Only trust a remote answer for "up to date". Local changelog alone can be stale.
         if (result.remote && result.latest && compareVersions(result.latest, VERSION) > 0) {
           this.setUpdate({ kind: "available", latest: result.latest, updateLink: result.updateLink });
-          // Install as soon as a newer build is found — no separate click.
-          await this.install(result.latest, result.updateLink);
         } else if (result.remote) {
           this.setUpdate({ kind: "latest" });
         } else {
@@ -210,15 +208,17 @@ export class PreferencePane {
       idle: "",
       checking: "检查中…",
       latest: "已是最新",
-      available: state.kind === "available" ? `发现 v${state.latest}` : "",
+      available: state.kind === "available" ? `有可用更新：v${state.latest}` : "",
       updating: "正在安装更新…",
-      updated: "已更新，请重启 Zotero",
+      updated: "更新已安装；重启 Zotero 以应用",
       error: state.kind === "error" ? state.message : "",
     };
     status.textContent = text[state.kind];
     status.dataset.state = state.kind;
-    // Manual install is a fallback only when auto-install failed.
-    if (install) install.hidden = state.kind !== "available";
+    if (install) {
+      install.hidden = state.kind !== "available";
+      if (state.kind === "available") install.textContent = `安装更新 v${state.latest}`;
+    }
     if (check) {
       check.disabled = state.kind === "checking" || state.kind === "updating";
       check.classList.toggle("mem-spinning", state.kind === "checking" || state.kind === "updating");

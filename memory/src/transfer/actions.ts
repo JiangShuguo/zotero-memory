@@ -1,6 +1,8 @@
 import { logError } from "../settings";
-import { buildBackup, importBackup, parseBackup } from "./annotations";
-import { alertUser, chooseBackupOpenPath, chooseBackupSavePath } from "./dialogs";
+import { applyImport, buildBackup, parseBackup, planImport, type ImportPlan, type ProblemEntry } from "./annotations";
+import { alertUser, chooseBackupOpenPath, chooseBackupSavePath, confirmUser, showProgress } from "./dialogs";
+
+const MAX_LISTED_PROBLEMS = 15;
 
 const ITEM_MENU_IDS = {
   separator: "mem-itemmenu-separator",
@@ -15,7 +17,13 @@ export async function exportAnnotations(): Promise<void> {
       alertUser("Memory", "请先选中一个 PDF 附件（或打开该 PDF）。");
       return;
     }
-    const backup = await buildBackup(attachment);
+    const done = showProgress("正在读取批注和 PDF 文字…");
+    let backup;
+    try {
+      backup = await buildBackup(attachment);
+    } finally {
+      done();
+    }
     const stem = String(attachment.attachmentFilename || "annotations").replace(/\.pdf$/i, "");
     const path = await chooseBackupSavePath(`${stem}-memory-annotations.json`);
     if (!path) return;
@@ -39,12 +47,21 @@ export async function importAnnotations(onImported: () => void): Promise<void> {
     if (!path) return;
     const raw = await (Zotero as any).File.getContentsAsync(path);
     const backup = parseBackup(String(raw));
-    const result = await importBackup(attachment, backup);
+    const done = showProgress("正在比对 PDF 文字…");
+    let plan: ImportPlan;
+    try {
+      plan = await planImport(attachment, backup);
+    } finally {
+      done();
+    }
+    if (!plan.items.length) {
+      alertUser("Memory", nothingToImport(plan));
+      return;
+    }
+    if ((!plan.exact || plan.failed.length) && !confirmUser("Memory", planSummary(plan))) return;
+    const result = await applyImport(attachment, plan);
     onImported();
-    alertUser(
-      "Memory",
-      `已导入 ${result.created} 条批注` + (result.skipped ? `，跳过 ${result.skipped} 条已存在或无效条目` : "") + "。",
-    );
+    alertUser("Memory", resultSummary(plan, result.created));
   } catch (error) {
     logError(error);
     alertUser("Memory", errorMessage(error));
@@ -123,6 +140,49 @@ function asPdfAttachment(item: any): any | undefined {
     if (child?.isPDFAttachment?.()) return child;
   }
   return undefined;
+}
+
+function planSummary(plan: ImportPlan): string {
+  const lines = [
+    plan.exact
+      ? `可以还原 ${plan.items.length} 条批注。`
+      : `目标 PDF 与备份时的文件不同，已按文字重新定位：可以还原 ${plan.items.length} 条批注。`,
+  ];
+  if (plan.duplicates) lines.push(`${plan.duplicates} 条已存在，将跳过。`);
+  if (plan.approximate.length) {
+    lines.push("", `以下 ${plan.approximate.length} 条无法按文字核对，将按原坐标放置：`, ...listProblems(plan.approximate));
+  }
+  if (plan.failed.length) {
+    lines.push("", `以下 ${plan.failed.length} 条无法导入：`, ...listProblems(plan.failed));
+  }
+  lines.push("", "是否继续导入？");
+  return lines.join("\n");
+}
+
+function resultSummary(plan: ImportPlan, created: number): string {
+  const lines = [`已导入 ${created} 条批注。`];
+  if (plan.duplicates) lines.push(`跳过 ${plan.duplicates} 条已存在的批注。`);
+  if (plan.approximate.length) lines.push(`${plan.approximate.length} 条按原坐标放置，请打开 PDF 核对。`);
+  if (plan.failed.length) lines.push(`${plan.failed.length} 条未能导入（见导入前的列表）。`);
+  return lines.join("\n");
+}
+
+function nothingToImport(plan: ImportPlan): string {
+  if (!plan.failed.length) {
+    return plan.duplicates ? `备份中的 ${plan.duplicates} 条批注都已存在，无需导入。` : "备份中没有批注。";
+  }
+  const lines = [`没有可导入的批注，${plan.failed.length} 条无法导入：`, ...listProblems(plan.failed)];
+  if (plan.duplicates) lines.push("", `另有 ${plan.duplicates} 条已存在。`);
+  return lines.join("\n");
+}
+
+function listProblems(entries: ProblemEntry[]): string[] {
+  const lines = entries.slice(0, MAX_LISTED_PROBLEMS).map((entry) => {
+    const snippet = entry.snippet ? `「${entry.snippet}」` : "";
+    return `• 第 ${entry.pageLabel} 页 ${entry.type}${snippet}：${entry.reason}`;
+  });
+  if (entries.length > MAX_LISTED_PROBLEMS) lines.push(`…另有 ${entries.length - MAX_LISTED_PROBLEMS} 条`);
+  return lines;
 }
 
 function errorMessage(error: unknown): string {

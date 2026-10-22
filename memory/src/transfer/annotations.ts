@@ -1,7 +1,26 @@
 /** Export / import PDF annotations for a Memory backup file. */
+import { logError } from "../settings";
+import { readPdfText } from "./pdf-text";
+import {
+  indexDocument,
+  locatePoint,
+  locateText,
+  pageText,
+  placeText,
+  pointAnchorAt,
+  sortIndex,
+  textAnchorAt,
+  topLeft,
+  type DocIndex,
+  type LocateHint,
+  type PointAnchor,
+  type TextAnchor,
+} from "./relocate";
 
 export const BACKUP_FORMAT = "zotero-memory-annotations";
-export const BACKUP_VERSION = 1;
+export const BACKUP_VERSION = 2;
+const READABLE_VERSIONS = new Set([1, 2]);
+const TEXT_TYPES = new Set(["highlight", "underline"]);
 
 export interface AnnotationBackup {
   format: typeof BACKUP_FORMAT;
@@ -10,6 +29,7 @@ export interface AnnotationBackup {
   pdf: {
     md5: string;
     filename: string;
+    pageCount?: number;
   };
   annotations: AnnotationPayload[];
 }
@@ -21,14 +41,29 @@ export interface AnnotationPayload {
   color?: string;
   pageLabel?: string;
   sortIndex: string;
-  position: Record<string, unknown>;
+  position: Record<string, any>;
   tags?: Array<{ name: string }>;
   image?: string;
+  anchor?: TextAnchor & Partial<PointAnchor>;
+}
+
+export interface ProblemEntry {
+  type: string;
+  pageLabel: string;
+  snippet: string;
+  reason: string;
+}
+
+export interface ImportPlan {
+  exact: boolean;
+  items: Array<{ payload: AnnotationPayload; moved: boolean }>;
+  duplicates: number;
+  approximate: ProblemEntry[];
+  failed: ProblemEntry[];
 }
 
 export interface ImportResult {
   created: number;
-  skipped: number;
 }
 
 export async function pdfMd5(attachment: any): Promise<string> {
@@ -48,6 +83,19 @@ export async function buildBackup(attachment: any): Promise<AnnotationBackup> {
     const json = await (Zotero as any).Annotations.toJSON(item);
     annotations.push(payloadFromJson(json));
   }
+
+  let pageCount: number | undefined;
+  if (annotations.length) {
+    try {
+      const index = indexDocument(await readPdfText(attachment));
+      pageCount = index.doc.pageCount;
+      for (const payload of annotations) payload.anchor = anchorFor(index, payload);
+    } catch (error) {
+      // Anchors only help when importing into a different file; the backup is still valid.
+      logError(error);
+    }
+  }
+
   return {
     format: BACKUP_FORMAT,
     version: BACKUP_VERSION,
@@ -55,6 +103,7 @@ export async function buildBackup(attachment: any): Promise<AnnotationBackup> {
     pdf: {
       md5,
       filename: String(attachment.attachmentFilename || attachment.getField?.("title") || "document.pdf"),
+      pageCount,
     },
     annotations,
   };
@@ -67,7 +116,7 @@ export function parseBackup(raw: string): AnnotationBackup {
   } catch {
     throw new Error("这不是有效的 Memory 标注备份文件。");
   }
-  if (!data || data.format !== BACKUP_FORMAT || data.version !== BACKUP_VERSION) {
+  if (!data || data.format !== BACKUP_FORMAT || !READABLE_VERSIONS.has(data.version)) {
     throw new Error("这不是 Memory 标注备份。");
   }
   if (!data.pdf?.md5 || !Array.isArray(data.annotations)) {
@@ -77,37 +126,49 @@ export function parseBackup(raw: string): AnnotationBackup {
 }
 
 /**
- * Restores every annotation from the backup onto `attachment` when the PDF
- * bytes match. Existing annotations with the same fingerprint are left alone.
+ * Works out where every annotation goes without writing anything.
+ * Identical files restore as-is; otherwise each annotation is found again by its text.
  */
-export async function importBackup(attachment: any, backup: AnnotationBackup): Promise<ImportResult> {
+export async function planImport(attachment: any, backup: AnnotationBackup): Promise<ImportPlan> {
   if (!attachment?.isPDFAttachment?.()) throw new Error("请先选中一个 PDF 附件。");
-  const md5 = await pdfMd5(attachment);
-  if (md5 !== backup.pdf.md5) {
-    throw new Error("两份 PDF 不完全一致，无法导入。只有文件内容完全相同时才能还原标注。");
-  }
+  const exact = (await pdfMd5(attachment)) === backup.pdf.md5;
+  const plan: ImportPlan = { exact, items: [], duplicates: 0, approximate: [], failed: [] };
+  const existing = existingFingerprints(attachment);
+  const index = exact ? undefined : indexDocument(await readPdfText(attachment));
 
-  const existing = new Set<string>();
-  for (const item of attachment.getAnnotations?.(false) ?? []) {
-    if (!item?.isAnnotation?.()) continue;
-    const json = (Zotero as any).Annotations.toJSONSync(item);
-    existing.add(fingerprint(json));
-  }
-
-  let created = 0;
-  let skipped = 0;
   for (const payload of backup.annotations) {
     if (!payload?.type || !payload.sortIndex || !payload.position) {
-      skipped += 1;
+      plan.failed.push(problem(payload, "备份条目不完整"));
       continue;
     }
-    if (existing.has(fingerprint(payload))) {
-      skipped += 1;
+    let placed: AnnotationPayload | undefined = payload;
+    let moved = false;
+    if (index) {
+      const outcome = relocate(index, payload, backup.pdf.pageCount);
+      if ("reason" in outcome) {
+        plan.failed.push(problem(payload, outcome.reason));
+        continue;
+      }
+      placed = outcome.payload;
+      moved = true;
+      if (outcome.approximate) plan.approximate.push(problem(payload, "按原坐标放置，请核对位置"));
+    }
+    const key = fingerprint(placed);
+    if (existing.has(key)) {
+      plan.duplicates += 1;
       continue;
     }
-    const key = (Zotero as any).DataObjectUtilities.generateKey();
+    existing.add(key);
+    plan.items.push({ payload: placed, moved });
+  }
+  return plan;
+}
+
+export async function applyImport(attachment: any, plan: ImportPlan): Promise<ImportResult> {
+  let created = 0;
+  for (const { payload, moved } of plan.items) {
     const item = await (Zotero as any).Annotations.saveFromJSON(attachment, {
-      key,
+      key: (Zotero as any).DataObjectUtilities.generateKey(),
       type: payload.type,
       text: payload.text,
       comment: payload.comment ?? "",
@@ -118,7 +179,8 @@ export async function importBackup(attachment: any, backup: AnnotationBackup): P
       tags: payload.tags,
       isExternal: false,
     });
-    if (payload.image && ["image", "ink"].includes(payload.type)) {
+    // A moved image annotation shows a different region; Zotero re-renders it when missing.
+    if (!moved && payload.image && ["image", "ink"].includes(payload.type)) {
       try {
         const blob = await dataURIToBlob(payload.image);
         if (blob) await (Zotero as any).Annotations.saveCacheImage(item, blob);
@@ -126,10 +188,158 @@ export async function importBackup(attachment: any, backup: AnnotationBackup): P
         // Geometry still restores; cache image is best-effort.
       }
     }
-    existing.add(fingerprint(payload));
     created += 1;
   }
-  return { created, skipped };
+  return { created };
+}
+
+// ---------------------------------------------------------------------------
+
+function anchorFor(index: DocIndex, payload: AnnotationPayload): AnnotationPayload["anchor"] {
+  const pageIndex = Number(payload.position?.pageIndex ?? 0);
+  const rects: number[][] = Array.isArray(payload.position?.rects) ? payload.position.rects : [];
+  if (TEXT_TYPES.has(payload.type) && payload.text) {
+    return textAnchorAt(index, payload.text, pageIndex, rects);
+  }
+  const point = referencePoint(payload.position);
+  return point ? pointAnchorAt(index, pageIndex, point) : undefined;
+}
+
+type Relocation = { payload: AnnotationPayload; approximate: boolean } | { reason: string };
+
+function relocate(index: DocIndex, payload: AnnotationPayload, sourcePageCount?: number): Relocation {
+  const pageIndex = Number(payload.position?.pageIndex ?? 0);
+  const hint: LocateHint = {
+    pageIndex,
+    sourcePageCount,
+    prefix: payload.anchor?.prefix,
+    suffix: payload.anchor?.suffix,
+    top: topOf(index, payload.position),
+  };
+
+  if (TEXT_TYPES.has(payload.type) && payload.text?.trim()) {
+    const match = locateText(index, payload.text, hint);
+    if (!match) return { reason: "目标 PDF 中找不到这段文字" };
+    const placement = placeText(index, match, payload.text);
+    if (!placement) return { reason: "这段文字在目标 PDF 中跨越多页" };
+    const position: Record<string, any> = { ...payload.position, ...placement.position };
+    if (!placement.position.nextPageRects) delete position.nextPageRects;
+    return {
+      approximate: false,
+      payload: {
+        ...payload,
+        text: placement.text,
+        pageLabel: placement.pageLabel,
+        sortIndex: placement.sortIndex,
+        position,
+      },
+    };
+  }
+
+  const original = referencePoint(payload.position);
+  if (!original) return { reason: "无法读取这条批注的位置" };
+  const anchor = payload.anchor;
+  if (anchor?.context) {
+    const found = locatePoint(index, anchor as PointAnchor, { ...hint, prefix: undefined, suffix: undefined });
+    if (!found) return { reason: "目标 PDF 中找不到批注旁边的文字" };
+    return { approximate: false, payload: moveTo(index, payload, found.pageIndex, original, found.point, found.charIndex) };
+  }
+  if (pageIndex >= index.doc.pageCount) return { reason: `目标 PDF 没有第 ${pageIndex + 1} 页` };
+  return { approximate: true, payload: moveTo(index, payload, pageIndex, original, original, 0) };
+}
+
+function moveTo(
+  index: DocIndex,
+  payload: AnnotationPayload,
+  pageIndex: number,
+  from: [number, number],
+  to: [number, number],
+  charIndex: number,
+): AnnotationPayload {
+  const page = pageText(index, pageIndex);
+  let dx = to[0] - from[0];
+  let dy = to[1] - from[1];
+  const box = boundingBox(payload.position);
+  if (page && box) {
+    const [vx1, vy1, vx2, vy2] = page.viewBox;
+    if (box[2] + dx > vx2) dx = vx2 - box[2];
+    if (box[0] + dx < vx1) dx = vx1 - box[0];
+    if (box[3] + dy > vy2) dy = vy2 - box[3];
+    if (box[1] + dy < vy1) dy = vy1 - box[1];
+  }
+  const shift = (rect: number[]) => [rect[0] + dx, rect[1] + dy, rect[2] + dx, rect[3] + dy].map(round);
+  const position: Record<string, any> = { ...payload.position, pageIndex };
+  if (Array.isArray(position.rects)) position.rects = position.rects.map(shift);
+  if (Array.isArray(position.paths)) {
+    position.paths = position.paths.map((path: number[]) => path.map((value, i) => round(value + (i % 2 ? dy : dx))));
+  }
+  delete position.nextPageRects;
+  const rects: number[][] = position.rects ?? (box ? [shift(box)] : []);
+  return {
+    ...payload,
+    position,
+    pageLabel: page?.label ?? payload.pageLabel,
+    sortIndex: page && rects.length ? sortIndex(page, charIndex, rects) : payload.sortIndex,
+  };
+}
+
+function referencePoint(position: Record<string, any> | undefined): [number, number] | undefined {
+  const box = boundingBox(position);
+  return box ? topLeft([box]) : undefined;
+}
+
+function boundingBox(position: Record<string, any> | undefined): number[] | undefined {
+  const rects: number[][] = [];
+  if (Array.isArray(position?.rects)) rects.push(...position!.rects);
+  if (Array.isArray(position?.paths)) {
+    for (const path of position!.paths as number[][]) {
+      for (let i = 0; i + 1 < path.length; i += 2) rects.push([path[i], path[i + 1], path[i], path[i + 1]]);
+    }
+  }
+  const valid = rects.filter((rect) => Array.isArray(rect) && rect.length >= 4 && rect.every(Number.isFinite));
+  if (!valid.length) return undefined;
+  return [
+    Math.min(...valid.map((r) => Math.min(r[0], r[2]))),
+    Math.min(...valid.map((r) => Math.min(r[1], r[3]))),
+    Math.max(...valid.map((r) => Math.max(r[0], r[2]))),
+    Math.max(...valid.map((r) => Math.max(r[1], r[3]))),
+  ];
+}
+
+function topOf(index: DocIndex, position: Record<string, any>): number | undefined {
+  const box = boundingBox(position);
+  const page = pageText(index, Number(position?.pageIndex ?? 0));
+  if (!box || !page) return undefined;
+  const height = page.viewBox[3] - page.viewBox[1];
+  return height > 0 ? Math.min(1, Math.max(0, (page.viewBox[3] - box[3]) / height)) : undefined;
+}
+
+function existingFingerprints(attachment: any): Set<string> {
+  const existing = new Set<string>();
+  for (const item of attachment.getAnnotations?.(false) ?? []) {
+    if (!item?.isAnnotation?.()) continue;
+    existing.add(fingerprint((Zotero as any).Annotations.toJSONSync(item)));
+  }
+  return existing;
+}
+
+const TYPE_LABELS: Record<string, string> = {
+  highlight: "高亮",
+  underline: "下划线",
+  note: "便签",
+  text: "文本",
+  image: "图片",
+  ink: "手绘",
+};
+
+function problem(payload: AnnotationPayload | undefined, reason: string): ProblemEntry {
+  const source = String(payload?.text || payload?.comment || "").replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+  return {
+    type: TYPE_LABELS[String(payload?.type)] ?? String(payload?.type ?? "批注"),
+    pageLabel: String(payload?.pageLabel || Number(payload?.position?.pageIndex ?? 0) + 1),
+    snippet: source.length > 40 ? `${source.slice(0, 40)}…` : source,
+    reason,
+  };
 }
 
 function payloadFromJson(json: any): AnnotationPayload {
@@ -158,6 +368,10 @@ function fingerprint(value: { type?: string; text?: string; color?: string; posi
     String(value.text ?? ""),
     JSON.stringify(value.position ?? null),
   ].join("\u001f");
+}
+
+function round(value: number): number {
+  return Math.round(value * 1000) / 1000;
 }
 
 async function dataURIToBlob(dataURI: string): Promise<Blob | undefined> {

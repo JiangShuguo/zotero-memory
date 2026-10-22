@@ -1,6 +1,24 @@
 {
   "releases": [
     {
+      "version": "1.5.0",
+      "date": "2026-10-22",
+      "changes": [
+        {
+          "kind": "added",
+          "text": "Importing a backup into a different PDF (publisher vs. arXiv, or an edited file) finds each annotation again by its text"
+        },
+        {
+          "kind": "added",
+          "text": "Before importing, lists annotations that cannot be placed and why"
+        },
+        {
+          "kind": "changed",
+          "text": "Updates are no longer installed automatically; the preferences show the new version and install it when you click"
+        }
+      ]
+    },
+    {
       "version": "1.4.3",
       "date": "2026-10-22",
       "changes": [

@@ -15,7 +15,7 @@
             </html:button>
             <html:span class="mem-update-status" data-mem-update-status=""></html:span>
             <html:span class="mem-update-version" data-mem-version=""></html:span>
-            <html:button type="button" class="mem-update-install" data-mem-action="install" hidden="hidden">更新</html:button>
+            <html:button type="button" class="mem-update-install" data-mem-action="install" hidden="hidden">安装更新</html:button>
             <html:span class="mem-update-divider"></html:span>
             <html:button type="button" class="mem-changelog-toggle" data-mem-action="changelog" aria-expanded="false">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true">
@@ -78,7 +78,7 @@
     <html:div class="mem-panel-head">
       <html:h2 class="mem-panel-title">备份</html:h2>
       <html:p class="mem-panel-hint">
-        导出当前选中 PDF 上的全部批注。仅当目标文件与备份完全一致时才能导入还原。
+        导出当前选中 PDF 上的全部批注。导入时若文件不同（如官网版与 arXiv 版、修改过的 PDF），会按文字重新定位，无法定位的批注会列出提示。
       </html:p>
     </html:div>
     <html:div class="mem-actions">
