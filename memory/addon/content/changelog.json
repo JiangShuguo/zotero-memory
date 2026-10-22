@@ -1,6 +1,16 @@
 {
   "releases": [
     {
+      "version": "1.5.7",
+      "date": "2026-10-22",
+      "changes": [
+        {
+          "kind": "changed",
+          "text": "批量导出支持点击整行展开、折叠分类"
+        }
+      ]
+    },
+    {
       "version": "1.5.6",
       "date": "2026-10-22",
       "changes": [

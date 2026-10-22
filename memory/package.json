@@ -1,6 +1,6 @@
 {
   "name": "zotero-memory",
-  "version": "1.5.6",
+  "version": "1.5.7",
   "private": true,
   "description": "Comment cards beside Zotero PDF pages, kept in sync with annotation notes",
   "license": "MIT",

@@ -192,8 +192,10 @@ function renderFolder(doc: Document, node: ExportFolderNode, collapsed: boolean)
   folder.dataset.collapsed = collapsed ? "true" : "false";
 
   const head = el(doc, "div", "mem-batch-folder-head");
+  head.title = "点击展开或折叠；点选左侧方框可全选";
   const toggle = el(doc, "button", "mem-batch-folder-toggle") as HTMLButtonElement;
   toggle.type = "button";
+  toggle.tabIndex = -1;
   toggle.setAttribute("aria-label", "展开或折叠");
   toggle.textContent = "▸";
 
@@ -225,15 +227,12 @@ function renderFolder(doc: Document, node: ExportFolderNode, collapsed: boolean)
     body.append(row);
   }
 
-  toggle.addEventListener("click", (event) => {
-    event.preventDefault();
-    event.stopPropagation();
-    const next = folder.dataset.collapsed !== "true";
+  const setCollapsed = (next: boolean) => {
     folder.dataset.collapsed = String(next);
     toggle.textContent = next ? "▸" : "▾";
-  });
+  };
 
-  select.addEventListener("change", () => {
+  const applyFolderSelect = () => {
     body.querySelectorAll("input[data-mem-pdf]").forEach((node) => {
       (node as HTMLInputElement).checked = select.checked;
     });
@@ -242,7 +241,20 @@ function renderFolder(doc: Document, node: ExportFolderNode, collapsed: boolean)
       box.checked = select.checked;
       box.indeterminate = false;
     });
+  };
+
+  // Whole strip: expand/collapse. Checkbox alone: select children.
+  head.addEventListener("click", (event) => {
+    const target = event.target as Element | null;
+    if (target?.closest?.("input[type='checkbox']")) return;
+    event.preventDefault();
+    setCollapsed(folder.dataset.collapsed !== "true");
   });
+
+  select.addEventListener("click", (event) => {
+    event.stopPropagation();
+  });
+  select.addEventListener("change", () => applyFolderSelect());
 
   body.addEventListener("change", (event) => {
     const target = event.target as Element | null;
@@ -680,10 +692,15 @@ function ensureStyles(doc: Document): void {
   padding: 4px 6px;
   border-radius: 6px;
   box-sizing: border-box;
+  cursor: pointer;
 }
 #mem-batch-dialog .mem-batch-folder-head:hover,
 #mem-batch-dialog .mem-batch-pdf:hover {
   background: color-mix(in srgb, currentColor 5%, transparent);
+}
+#mem-batch-dialog .mem-batch-folder-title,
+#mem-batch-dialog .mem-batch-folder-count {
+  pointer-events: none;
 }
 #mem-batch-dialog .mem-batch-folder-toggle,
 #mem-batch-dialog .mem-batch-row-spacer {
