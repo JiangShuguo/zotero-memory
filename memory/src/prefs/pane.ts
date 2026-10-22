@@ -181,12 +181,13 @@ export class PreferencePane {
     updateLink = this.update.kind === "available" ? this.update.updateLink : undefined,
   ): Promise<void> {
     if (!latest) return;
-    this.setUpdate({ kind: "updating", latest, progress: null });
+    this.setUpdate({ kind: "updating", latest, progress: 0 });
     try {
       if (
         await installUpdate(updateLink, (fraction) => {
           if (this.update.kind !== "updating") return;
-          this.setUpdate({ kind: "updating", latest, progress: fraction });
+          const progress = typeof fraction === "number" && Number.isFinite(fraction) ? fraction : this.update.progress;
+          this.setUpdate({ kind: "updating", latest, progress });
         })
       ) {
         this.setUpdate({ kind: "updated" });

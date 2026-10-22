@@ -1,20 +1,6 @@
 import { ADDON_ID, CHROME_PACKAGE, REPOSITORY } from "./constants";
 
 declare const ChromeUtils: { importESModule(path: string): any };
-declare const XMLHttpRequest: {
-  new (): {
-    open(method: string, url: string, async?: boolean): void;
-    send(): void;
-    timeout: number;
-    responseType: string;
-    response: ArrayBuffer | null;
-    status: number;
-    onprogress: ((event: ProgressEvent) => void) | null;
-    onload: (() => void) | null;
-    onerror: (() => void) | null;
-    ontimeout: (() => void) | null;
-  };
-};
 
 export const RELEASES_PAGE = `https://github.com/${REPOSITORY}/releases`;
 
@@ -75,7 +61,8 @@ export async function checkForUpdates(): Promise<UpdateCheck> {
   }
 
   const local = parseChangelog(await fetchJson(`chrome://${CHROME_PACKAGE}/content/changelog.json`));
-  const releases = mergeReleases(...remoteChangelogs, local);
+  // Bundled changelog wins — remote CDN copies may still be older English text.
+  const releases = mergeReleases(local, remoteChangelogs);
 
   const latest = found.length
     ? found.reduce((best, next) => (compareVersions(next.version, best.version) > 0 ? next : best))
@@ -108,7 +95,7 @@ export async function installUpdate(updateLink?: string, onProgress?: UpdateProg
     (await checkForUpdates()).updateLink ||
     `https://github.com/${REPOSITORY}/releases/latest/download/memory.xpi`;
 
-  onProgress?.(null);
+  onProgress?.(0);
   if (await installFromUrl(AddonManager, link, onProgress)) return true;
   if (await installViaAddonManager(AddonManager, onProgress)) return true;
   return false;
@@ -247,36 +234,44 @@ async function installFromUrl(AddonManager: any, url: string, onProgress?: Updat
 
 async function downloadXpi(url: string, onProgress?: UpdateProgress): Promise<string | undefined> {
   const PathUtils = (globalThis as any).PathUtils;
-  const IOUtils = (globalThis as any).IOUtils;
-  if (!PathUtils?.join || !IOUtils?.write) return undefined;
-  const dest = PathUtils.join(PathUtils.tempDir, `memory-update-${Date.now()}.xpi`);
+  const tempDir = PathUtils?.tempDir ?? (Zotero as any).getTempDirectory?.()?.path;
+  if (!PathUtils?.join || !tempDir) return undefined;
+  const dest = PathUtils.join(tempDir, `memory-update-${Date.now()}.xpi`);
 
-  const buffer = await new Promise<ArrayBuffer | undefined>((resolve) => {
-    try {
-      const xhr = new XMLHttpRequest();
-      xhr.open("GET", url, true);
-      xhr.responseType = "arraybuffer";
-      xhr.onprogress = (event) => {
-        if (event.lengthComputable && event.total > 0) {
-          onProgress?.(Math.max(0, Math.min(0.9, (event.loaded / event.total) * 0.9)));
+  onProgress?.(0);
+  try {
+    // Zotero's download streams to disk and reports real byte progress.
+    await (Zotero as any).HTTP.download(url, dest, {
+      timeout: 120000,
+      noCache: true,
+      onProgress: (loaded: number, total: number | null) => {
+        if (typeof total === "number" && total > 0) {
+          onProgress?.(Math.max(0, Math.min(0.9, (loaded / total) * 0.9)));
+          return;
         }
-      };
-      xhr.onload = () => {
-        if (xhr.status >= 200 && xhr.status < 300 && xhr.response) resolve(xhr.response as ArrayBuffer);
-        else resolve(undefined);
-      };
-      xhr.onerror = () => resolve(undefined);
-      xhr.ontimeout = () => resolve(undefined);
-      xhr.timeout = 120000;
-      xhr.send();
+        // No Content-Length (rare): approximate so the UI still moves.
+        if (loaded > 0) onProgress?.(Math.min(0.85, loaded / (loaded + 400_000)));
+      },
+    });
+    onProgress?.(0.92);
+    return dest;
+  } catch (error) {
+    logDownloadError(error);
+    try {
+      await (globalThis as any).IOUtils?.remove?.(dest, { ignoreAbsent: true });
     } catch {
-      resolve(undefined);
+      // ignore
     }
-  });
-  if (!buffer) return undefined;
-  await IOUtils.write(dest, new Uint8Array(buffer));
-  onProgress?.(0.92);
-  return dest;
+    return undefined;
+  }
+}
+
+function logDownloadError(error: unknown): void {
+  try {
+    (Zotero as any).logError?.(error);
+  } catch {
+    // ignore
+  }
 }
 
 async function installFromLocalFile(AddonManager: any, path: string, onProgress?: UpdateProgress): Promise<boolean> {
@@ -366,15 +361,16 @@ function parseChangelog(data: any): ReleaseNote[] {
     .sort((a: ReleaseNote, b: ReleaseNote) => compareVersions(b.version, a.version));
 }
 
-function mergeReleases(...lists: ReleaseNote[][]): ReleaseNote[] {
+/** Local notes overwrite remotes for the same version; remotes only fill missing versions. */
+function mergeReleases(local: ReleaseNote[], remotes: ReleaseNote[][]): ReleaseNote[] {
   const byVersion = new Map<string, ReleaseNote>();
-  for (const list of lists) {
+  for (const list of remotes) {
     for (const release of list) {
-      const existing = byVersion.get(release.version);
-      if (!existing || release.changes.length > existing.changes.length) {
-        byVersion.set(release.version, release);
-      }
+      if (!byVersion.has(release.version)) byVersion.set(release.version, release);
     }
+  }
+  for (const release of local) {
+    byVersion.set(release.version, release);
   }
   return [...byVersion.values()].sort((a, b) => compareVersions(b.version, a.version));
 }
