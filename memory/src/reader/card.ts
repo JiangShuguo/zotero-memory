@@ -1,4 +1,5 @@
 import { MARKS, SIZES, parseComment, renderRich, type Mark } from "../markup/rich-text";
+import { annotationColorOptions } from "../model/colors";
 import type { AnnotationType, MarginNote, PageAnchor } from "../model/types";
 import { RichEditor, type FormatCommand } from "./rich-editor";
 import { PreviewSelection } from "./preview-selection";
@@ -6,9 +7,12 @@ import { CardScrollbar } from "./scrollbar";
 
 const SAVE_DELAY_MS = 700;
 const STATUS_CLEAR_MS = 1200;
+const MORE_ICON =
+  '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="3" cy="7" r="1.15"/><circle cx="7" cy="7" r="1.15"/><circle cx="11" cy="7" r="1.15"/></svg>';
 
 export interface CardHost {
   save(card: Card, value: string): Promise<void>;
+  setColor(card: Card, color: string): Promise<void>;
   copyText(text: string): void;
   activate(card: Card): void;
   /** Marks the card as current without selecting the annotation in the reader. */
@@ -51,6 +55,8 @@ export class Card {
 
   private model: MarginNote;
   private readonly bar: HTMLElement;
+  private readonly colorButton: HTMLButtonElement;
+  private readonly colorMenu: HTMLElement;
   private readonly preview: HTMLElement;
   private readonly editorElement: HTMLElement;
   private readonly status: HTMLElement;
@@ -63,6 +69,7 @@ export class Card {
   private dirty = false;
   private saving = false;
   private editing = false;
+  private colorMenuOpen = false;
   private saveTimer?: ReturnType<typeof setTimeout>;
   private statusTimer?: ReturnType<typeof setTimeout>;
   private readonly cleanups: Array<() => void> = [];
@@ -80,7 +87,10 @@ export class Card {
     this.element.className = "mem-card";
     this.element.dataset.annotationKey = note.key;
 
-    this.bar = this.buildToolbar();
+    const tools = this.buildToolbar();
+    this.bar = tools.bar;
+    this.colorButton = tools.colorButton;
+    this.colorMenu = this.buildColorMenu();
 
     this.preview = doc.createElement("div");
     this.preview.className = "mem-preview";
@@ -103,13 +113,14 @@ export class Card {
     footer.append(this.status);
 
     this.scrollbar = new CardScrollbar(doc);
-    this.element.append(this.bar, this.preview, this.editorElement, footer, this.scrollbar.element);
+    this.element.append(this.bar, this.colorMenu, this.preview, this.editorElement, footer, this.scrollbar.element);
     this.applyNote();
     this.editor.load(this.draft);
     this.renderPreview();
     this.bindCard();
     this.bindEditor();
     this.bindToolbar();
+    this.bindColorMenu();
     this.scrollbar.attach(this.preview);
   }
 
@@ -163,6 +174,7 @@ export class Card {
 
   destroy(): void {
     this.clearTimers();
+    this.closeColorMenu();
     if (this.dirty && !this.saving) void this.persist();
     for (const cleanup of this.cleanups.splice(0)) cleanup();
     this.scrollbar.destroy();
@@ -179,6 +191,7 @@ export class Card {
     card.addEventListener("pointerdown", (event) => {
       const target = event.target as Node;
       if (this.editorElement.contains(target)) return;
+      if (this.colorButton.contains(target) || this.colorMenu.contains(target)) return;
       // Skips the reader's mousedown handler, which would drop the annotation selection.
       event.preventDefault();
       if (this.scrollbar.element.contains(target) || this.preview.contains(target)) return;
@@ -236,6 +249,11 @@ export class Card {
       event.preventDefault();
       event.stopPropagation();
       if (event.button !== 0) return;
+      if (this.colorButton.contains(event.target as Node)) {
+        if (!this.model.readOnly) this.toggleColorMenu();
+        return;
+      }
+      this.closeColorMenu();
       const tool = this.buttons.find((entry) => entry.element.contains(event.target as Node));
       if (tool) this.run(tool.command);
     });
@@ -249,7 +267,7 @@ export class Card {
     bar.addEventListener("focusin", () => this.keepFocus());
   }
 
-  private buildToolbar(): HTMLElement {
+  private buildToolbar(): { bar: HTMLElement; colorButton: HTMLButtonElement } {
     const doc = this.doc;
     const bar = doc.createElement("div");
     bar.className = "mem-bar";
@@ -281,7 +299,154 @@ export class Card {
     separator();
     add("Bulleted list", LIST_ICON, { kind: "list" });
     add("Clear formatting", CLEAR_ICON, { kind: "clear" });
-    return bar;
+    separator();
+    const colorButton = doc.createElement("button");
+    colorButton.type = "button";
+    colorButton.className = "mem-color-toggle";
+    colorButton.tabIndex = -1;
+    colorButton.title = "Annotation color";
+    colorButton.setAttribute("aria-label", "Annotation color");
+    colorButton.setAttribute("aria-haspopup", "menu");
+    colorButton.setAttribute("aria-expanded", "false");
+    colorButton.innerHTML = MORE_ICON;
+    bar.append(colorButton);
+    return { bar, colorButton };
+  }
+
+  private buildColorMenu(): HTMLElement {
+    const menu = this.doc.createElement("div");
+    menu.className = "mem-color-menu";
+    menu.hidden = true;
+    menu.setAttribute("role", "menu");
+    menu.setAttribute("aria-label", "Annotation color");
+    return menu;
+  }
+
+  private bindColorMenu(): void {
+    this.colorMenu.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (event.button !== 0 || this.model.readOnly) return;
+      const option = (event.target as HTMLElement | null)?.closest?.("[data-mem-color]") as HTMLElement | null;
+      if (!option) return;
+      const color = option.dataset.memColor;
+      if (!color || color.toLowerCase() === this.model.color.toLowerCase()) {
+        this.closeColorMenu();
+        return;
+      }
+      void this.changeColor(color);
+    });
+    for (const name of ["pointerup", "mousedown", "mouseup", "click", "dblclick"]) {
+      this.colorMenu.addEventListener(name, (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      });
+    }
+    const onDocPointer = (event: Event) => {
+      if (!this.colorMenuOpen) return;
+      const target = event.target as Node | null;
+      if (target && (this.colorButton.contains(target) || this.colorMenu.contains(target))) return;
+      this.closeColorMenu();
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && this.colorMenuOpen) {
+        event.stopPropagation();
+        this.closeColorMenu();
+      }
+    };
+    this.doc.addEventListener("pointerdown", onDocPointer, true);
+    this.doc.addEventListener("keydown", onKey, true);
+    this.cleanups.push(() => {
+      this.doc.removeEventListener("pointerdown", onDocPointer, true);
+      this.doc.removeEventListener("keydown", onKey, true);
+    });
+  }
+
+  private toggleColorMenu(): void {
+    if (this.colorMenuOpen) this.closeColorMenu();
+    else this.openColorMenu();
+  }
+
+  private openColorMenu(): void {
+    if (this.model.readOnly || !this.editing) return;
+    this.renderColorMenu();
+    this.placeColorMenu();
+    this.colorMenu.hidden = false;
+    this.colorMenuOpen = true;
+    this.colorButton.setAttribute("aria-expanded", "true");
+    this.colorButton.classList.add("mem-on");
+    this.element.classList.add("mem-menu-open");
+  }
+
+  private closeColorMenu(): void {
+    if (!this.colorMenuOpen && this.colorMenu.hidden) return;
+    this.colorMenu.hidden = true;
+    this.colorMenuOpen = false;
+    this.colorButton.setAttribute("aria-expanded", "false");
+    this.colorButton.classList.remove("mem-on");
+    this.element.classList.remove("mem-menu-open");
+  }
+
+  private placeColorMenu(): void {
+    const cardRect = this.element.getBoundingClientRect();
+    const buttonRect = this.colorButton.getBoundingClientRect();
+    const top = buttonRect.bottom - cardRect.top + 4;
+    const left = Math.max(8, Math.min(buttonRect.left - cardRect.left, cardRect.width - 168));
+    this.colorMenu.style.top = `${top}px`;
+    this.colorMenu.style.left = `${left}px`;
+    this.colorMenu.style.right = "auto";
+  }
+
+  private renderColorMenu(): void {
+    const { colors, showNames } = annotationColorOptions();
+    const current = this.model.color.toLowerCase();
+    this.colorMenu.classList.toggle("mem-with-names", showNames);
+    const nodes: HTMLElement[] = [];
+    for (const entry of colors) {
+      const button = this.doc.createElement("button");
+      button.type = "button";
+      button.className = "mem-color-option";
+      button.tabIndex = -1;
+      button.dataset.memColor = entry.color;
+      button.setAttribute("role", "menuitemradio");
+      button.setAttribute("aria-checked", String(entry.color === current));
+      button.title = entry.label;
+      button.setAttribute("aria-label", entry.label);
+      if (entry.color === current) button.classList.add("mem-on");
+
+      const swatch = this.doc.createElement("span");
+      swatch.className = "mem-color-swatch";
+      swatch.style.background = entry.color;
+      button.append(swatch);
+
+      if (showNames) {
+        const label = this.doc.createElement("span");
+        label.className = "mem-color-label";
+        label.textContent = entry.label;
+        const check = this.doc.createElement("span");
+        check.className = "mem-color-check";
+        check.textContent = entry.color === current ? "✓" : "";
+        button.append(label, check);
+      }
+      nodes.push(button);
+    }
+    this.colorMenu.replaceChildren(...nodes);
+  }
+
+  private async changeColor(color: string): Promise<void> {
+    this.closeColorMenu();
+    const previous = this.model.color;
+    this.model = { ...this.model, color };
+    this.applyNote();
+    this.host.resized(this);
+    try {
+      await this.host.setColor(this, color);
+    } catch (error) {
+      this.model = { ...this.model, color: previous };
+      this.applyNote();
+      this.host.resized(this);
+      this.setStatus(error instanceof Error ? error.message : "Could not change the color", { error: true });
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -397,6 +562,7 @@ export class Card {
     if (!this.editing) return;
     this.editing = false;
     this.element.classList.remove("mem-editing");
+    this.closeColorMenu();
     this.renderPreview();
     this.scrollbar.attach(this.preview);
     this.host.editingChanged(this);
@@ -449,6 +615,8 @@ export class Card {
   private applyNote(): void {
     const note = this.model;
     this.element.style.setProperty("--mem-color", note.color);
+    this.colorButton.disabled = note.readOnly;
+    if (note.readOnly || !this.editing) this.closeColorMenu();
     // The reader treats only contenteditable="true" as a text box when it handles shortcuts.
     this.editorElement.setAttribute("contenteditable", note.readOnly ? "false" : "true");
     this.editorElement.setAttribute("aria-readonly", String(note.readOnly));
@@ -457,6 +625,7 @@ export class Card {
     this.applyLabels();
     this.setStatus(this.status.textContent === "Read-only" ? "" : this.status.textContent ?? "");
     this.renderPreview();
+    if (this.colorMenuOpen) this.renderColorMenu();
   }
 
   private applyLabels(): void {

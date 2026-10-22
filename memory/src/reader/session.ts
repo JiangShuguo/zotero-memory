@@ -44,6 +44,11 @@ export class ReaderSession {
       await this.store.saveComment(card.note.itemID, value);
       if (value.trim()) this.pinned.delete(card.key);
     },
+    setColor: async (card, color) => {
+      await this.store.saveColor(card.note.itemID, color);
+      // Notifier refresh redraws the PDF highlight; also refresh lines now for the new border color.
+      this.queueLayout(card);
+    },
     copyText: (text) => copyToClipboard(text),
     activate: (card) => {
       this.setActive(card.key);

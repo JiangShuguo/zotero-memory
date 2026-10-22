@@ -17,11 +17,23 @@ export class NoteStore {
   }
 
   async saveComment(itemID: number, value: string): Promise<void> {
+    const item = this.editableAnnotation(itemID);
+    item.annotationComment = value;
+    await item.saveTx();
+  }
+
+  async saveColor(itemID: number, color: string): Promise<void> {
+    if (!/^#[0-9a-f]{6}$/i.test(color)) throw new Error("Invalid annotation color");
+    const item = this.editableAnnotation(itemID);
+    item.annotationColor = color.toLowerCase();
+    await item.saveTx();
+  }
+
+  private editableAnnotation(itemID: number): any {
     const item = Zotero.Items.get(itemID) as any;
     if (!item?.isAnnotation?.()) throw new Error("This annotation no longer exists");
     if (item.isEditable?.() === false) throw new Error("This annotation is read-only");
-    item.annotationComment = value;
-    await item.saveTx();
+    return item;
   }
 }
 

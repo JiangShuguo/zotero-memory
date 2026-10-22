@@ -270,6 +270,85 @@ export const SURFACE_CSS = `
 .mem-card.mem-editing .mem-preview { display: none; }
 .mem-card.mem-editing .mem-editor { display: block; }
 
+.mem-color-menu {
+  position: absolute;
+  z-index: 6;
+  display: grid;
+  grid-template-columns: repeat(4, 28px);
+  gap: 4px;
+  padding: 6px;
+  border: 1px solid color-mix(in srgb, CanvasText 14%, transparent);
+  border-radius: 10px;
+  background: Canvas;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .14);
+  pointer-events: auto;
+  user-select: none;
+  -moz-user-select: none;
+}
+
+.mem-color-menu.mem-with-names {
+  grid-template-columns: repeat(2, max-content);
+  gap: 2px 6px;
+}
+
+.mem-color-menu[hidden] { display: none; }
+
+.mem-color-option {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: CanvasText;
+  cursor: pointer;
+}
+
+.mem-color-menu.mem-with-names .mem-color-option {
+  display: grid;
+  grid-template-columns: 14px max-content 12px;
+  gap: 6px;
+  width: auto;
+  min-height: 28px;
+  padding: 4px 6px;
+  justify-content: start;
+  font: 12px/1.2 "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  text-align: start;
+}
+
+.mem-color-option:hover,
+.mem-color-option.mem-on {
+  background: color-mix(in srgb, CanvasText 9%, transparent);
+}
+
+.mem-color-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, CanvasText 18%, transparent);
+}
+
+.mem-color-menu.mem-with-names .mem-color-swatch {
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+}
+
+.mem-color-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mem-color-check {
+  font-size: 12px;
+  line-height: 1;
+  text-align: center;
+}
+
 .mem-bar { display: none; }
 
 .mem-card.mem-editing .mem-bar {
@@ -282,6 +361,12 @@ export const SURFACE_CSS = `
   border-bottom: 1px solid color-mix(in srgb, CanvasText 14%, transparent);
   user-select: none;
   -moz-user-select: none;
+}
+
+.mem-bar .mem-color-toggle svg {
+  display: block;
+  margin: 0 auto;
+  fill: currentColor;
 }
 
 .mem-bar button {

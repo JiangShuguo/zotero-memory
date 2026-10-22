@@ -6,7 +6,7 @@
 
 | | |
 | --- | --- |
-| Version | 1.2.0 |
+| Version | 1.3.0 |
 | Author | jsg |
 | Compatible with | Zotero 7.x – 10.* |
 | License | MIT |
@@ -40,6 +40,7 @@ For each visible annotation that has a comment (or a note / a temporarily pinned
 | Long comments | Height caps at about nine lines; scroll inside the card |
 | Scrollbar | Thin bar in the annotation color; dim when idle, bright while scrolling |
 | Click | Opens in-place editing |
+| Color button | In the edit toolbar; changes the annotation color |
 | Drag | Selects text to copy (Ctrl/Cmd+C) |
 | Autosave | About 700 ms after you stop typing |
 | Save now | Ctrl/Cmd+Enter |
