@@ -1,6 +1,20 @@
 {
   "releases": [
     {
+      "version": "1.5.1",
+      "date": "2026-10-22",
+      "changes": [
+        {
+          "kind": "fixed",
+          "text": "Import/export no longer fails with DataCloneError when reading PDF text across the reader worker boundary"
+        },
+        {
+          "kind": "fixed",
+          "text": "Opening a PDF after import no longer shows \"can't access dead object\" from a closed background reader tab"
+        }
+      ]
+    },
+    {
       "version": "1.5.0",
       "date": "2026-10-22",
       "changes": [

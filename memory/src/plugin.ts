@@ -6,6 +6,7 @@ import { TOOLBAR_CSS, TOOLBAR_STYLE_ID } from "./reader/styles";
 import { logError, readSettings, writeEnabled, writeKind, type Settings } from "./settings";
 import { NoteStore } from "./store";
 import { addItemMenu, exportAnnotations, importAnnotations } from "./transfer/actions";
+import { isLiveReader } from "./transfer/pdf-text";
 
 const BUTTON_CLASS = "mem-toolbar-toggle";
 const FALLBACK_SECTION_CLASS = "mem-fallback-section";
@@ -122,7 +123,14 @@ export class MemoryPlugin {
   }
 
   private refreshSessions(): void {
-    for (const session of this.sessions.values()) session.refresh();
+    this.dropClosedReaders();
+    for (const session of this.sessions.values()) {
+      try {
+        session.refresh();
+      } catch (error) {
+        logError(error);
+      }
+    }
   }
 
   private async reveal(reader: any, keys: string[]): Promise<void> {
@@ -208,7 +216,7 @@ export class MemoryPlugin {
   }
 
   private dropClosedReaders(): void {
-    const live = new Set<object>((Zotero as any).Reader?._readers ?? []);
+    const live = new Set<object>(((Zotero as any).Reader?._readers ?? []).filter(isLiveReader));
     for (const [reader, session] of this.sessions) {
       if (live.has(reader)) continue;
       session.destroy();

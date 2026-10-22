@@ -36,12 +36,14 @@ export async function readPdfText(attachment: any): Promise<PdfText> {
   }
   if (!reader) throw new Error("无法打开这篇 PDF。");
   try {
-    const { pdfDocument, primaryView } = await waitForDocument(reader);
+    const { pdfDocument, primaryView, win } = await waitForDocument(reader);
     const pageCount = Number(pdfDocument.numPages) || 0;
     const labels = await standardLabels(pdfDocument);
     const pages: PdfPageText[] = [];
     for (let pageIndex = 0; pageIndex < pageCount; pageIndex++) {
-      const data = await pdfDocument.getPageData({ pageIndex });
+      // The request is posted to the PDF worker, so it must be an object of the reader's own window.
+      const request = win.JSON.parse(JSON.stringify({ pageIndex }));
+      const data = await pdfDocument.getPageData(request);
       pages.push({
         pageIndex,
         chars: copyChars(data?.chars),
@@ -57,11 +59,23 @@ export async function readPdfText(attachment: any): Promise<PdfText> {
 
 function findReader(itemID: number): any | undefined {
   return ((Zotero as any).Reader?._readers ?? []).find(
-    (reader: any) => reader?.itemID === itemID && (reader._type === "pdf" || reader.type === "pdf"),
+    (reader: any) =>
+      reader?.itemID === itemID && (reader._type === "pdf" || reader.type === "pdf") && isLiveReader(reader),
   );
 }
 
-async function waitForDocument(reader: any): Promise<{ pdfDocument: any; primaryView: any }> {
+/** Closed tabs linger in Zotero.Reader._readers until the notifier removes them; their windows are dead. */
+export function isLiveReader(reader: any): boolean {
+  if (!reader || reader._isTabClosed) return false;
+  try {
+    const win = reader._iframeWindow;
+    return !win || Boolean(win.document);
+  } catch {
+    return false;
+  }
+}
+
+async function waitForDocument(reader: any): Promise<{ pdfDocument: any; primaryView: any; win: any }> {
   try {
     await reader._initPromise;
   } catch {
@@ -70,8 +84,9 @@ async function waitForDocument(reader: any): Promise<{ pdfDocument: any; primary
   const started = Date.now();
   while (Date.now() - started < OPEN_TIMEOUT_MS) {
     const primaryView = reader._internalReader?._primaryView;
-    const pdfDocument = primaryView?._iframeWindow?.PDFViewerApplication?.pdfDocument;
-    if (pdfDocument?.getPageData) return { pdfDocument, primaryView };
+    const win = primaryView?._iframeWindow;
+    const pdfDocument = win?.PDFViewerApplication?.pdfDocument;
+    if (pdfDocument?.getPageData) return { pdfDocument, primaryView, win };
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error("读取 PDF 文字超时，请先在 Zotero 中打开这篇 PDF 后再试。");

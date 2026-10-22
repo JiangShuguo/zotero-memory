@@ -60,7 +60,11 @@ export async function importAnnotations(onImported: () => void): Promise<void> {
     }
     if ((!plan.exact || plan.failed.length) && !confirmUser("Memory", planSummary(plan))) return;
     const result = await applyImport(attachment, plan);
-    onImported();
+    try {
+      onImported();
+    } catch (error) {
+      logError(error);
+    }
     alertUser("Memory", resultSummary(plan, result.created));
   } catch (error) {
     logError(error);
