@@ -147,6 +147,8 @@ export class PreferencePane {
         // Only trust a remote answer for "up to date". Local changelog alone can be stale.
         if (result.remote && result.latest && compareVersions(result.latest, VERSION) > 0) {
           this.setUpdate({ kind: "available", latest: result.latest });
+          // Install as soon as a newer build is found — no separate click.
+          await this.install(result.latest, result.updateLink);
         } else if (result.remote) {
           this.setUpdate({ kind: "latest" });
         } else {
@@ -162,22 +164,20 @@ export class PreferencePane {
     return this.checking;
   }
 
-  private async install(): Promise<void> {
-    if (this.update.kind !== "available") return;
-    const latest = this.update.latest;
+  private async install(latest = this.update.kind === "available" ? this.update.latest : undefined, updateLink?: string): Promise<void> {
+    if (!latest) return;
     this.setUpdate({ kind: "updating" });
     try {
-      if (await installUpdate()) {
+      if (await installUpdate(updateLink)) {
         this.setUpdate({ kind: "updated" });
         return;
       }
     } catch (error) {
       logError(error);
     }
-    // The add-on manager found nothing (or failed): let the user download it instead.
     this.setUpdate({ kind: "available", latest });
     const release = this.releases.find((entry) => entry.version === latest);
-    (Zotero as any).launchURL?.(release?.url ?? RELEASES_PAGE);
+    (Zotero as any).launchURL?.(release?.url ?? updateLink ?? RELEASES_PAGE);
   }
 
   private setUpdate(state: UpdateState): void {
@@ -208,16 +208,17 @@ export class PreferencePane {
       checking: "Checking…",
       latest: "Up to date",
       available: state.kind === "available" ? `v${state.latest} available` : "",
-      updating: "Updating…",
-      updated: "Updated. Reopen settings to see it",
+      updating: "Installing update…",
+      updated: "Updated — restart Zotero",
       error: state.kind === "error" ? state.message : "",
     };
     status.textContent = text[state.kind];
     status.dataset.state = state.kind;
+    // Manual install is a fallback only when auto-install failed.
     if (install) install.hidden = state.kind !== "available";
     if (check) {
       check.disabled = state.kind === "checking" || state.kind === "updating";
-      check.classList.toggle("mem-spinning", state.kind === "checking");
+      check.classList.toggle("mem-spinning", state.kind === "checking" || state.kind === "updating");
     }
   }
 

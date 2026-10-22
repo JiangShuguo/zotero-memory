@@ -13,7 +13,7 @@ ADDON = ROOT / "addon"
 BUILD = ROOT / "build"
 OUT = BUILD / "memory.xpi"
 ADDON_ID = "memory@jsg.local"
-VERSION = "1.4.1"
+VERSION = "1.4.2"
 HOMEPAGE = "https://github.com/JiangShuguo/zotero-memory"
 UPDATE_URL = (
     "https://raw.githubusercontent.com/JiangShuguo/zotero-memory/main/memory/updates.json"

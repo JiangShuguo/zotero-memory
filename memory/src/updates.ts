@@ -4,15 +4,12 @@ declare const ChromeUtils: { importESModule(path: string): any };
 
 export const RELEASES_PAGE = `https://github.com/${REPOSITORY}/releases`;
 
-/** Prefer GitHub raw (fresh); jsDelivr is a fallback and may lag behind. */
+/** Version sources: GitHub raw only. jsDelivr is not used for the version verdict (it can lag). */
+const UPDATES_URL = `https://raw.githubusercontent.com/${REPOSITORY}/main/memory/updates.json`;
+
 const CHANGELOG_MIRRORS = [
   `https://raw.githubusercontent.com/${REPOSITORY}/main/memory/addon/content/changelog.json`,
   `https://cdn.jsdelivr.net/gh/${REPOSITORY}@main/memory/addon/content/changelog.json`,
-];
-
-const UPDATES_MIRRORS = [
-  `https://raw.githubusercontent.com/${REPOSITORY}/main/memory/updates.json`,
-  `https://cdn.jsdelivr.net/gh/${REPOSITORY}@main/memory/updates.json`,
 ];
 
 export type ChangeKind = "added" | "changed" | "fixed";
@@ -27,7 +24,9 @@ export interface ReleaseNote {
 export interface UpdateCheck {
   /** Newest version seen from a remote source. */
   latest?: string;
-  /** True when at least one remote mirror answered. */
+  /** XPI download URL for `latest`, when known. */
+  updateLink?: string;
+  /** True when at least one remote version source answered. */
   remote: boolean;
   releases: ReleaseNote[];
 }
@@ -36,30 +35,31 @@ const KINDS = new Set<ChangeKind>(["added", "changed", "fixed"]);
 
 /**
  * Checks for a newer version and loads the changelog.
- * Remote mirrors are preferred for the version verdict; the bundled changelog is only a display fallback.
+ * The version verdict comes only from GitHub raw `updates.json` and Zotero's AddonManager.
  */
 export async function checkForUpdates(): Promise<UpdateCheck> {
   const remoteVersions: string[] = [];
-  const remoteChangelogs: ReleaseNote[][] = [];
+  let updateLink: string | undefined;
 
-  const updateResults = await Promise.all(UPDATES_MIRRORS.map((url) => fetchJson(bust(url))));
-  for (const data of updateResults) {
-    const version = versionFromUpdates(data);
-    if (version) remoteVersions.push(version);
+  const updates = await fetchJson(bust(UPDATES_URL));
+  const fromFile = versionFromUpdates(updates);
+  if (fromFile) {
+    remoteVersions.push(fromFile.version);
+    updateLink = fromFile.link;
   }
 
-  const managerVersion = await latestFromAddonManager();
-  if (managerVersion) remoteVersions.push(managerVersion);
+  const fromManager = await latestFromAddonManager();
+  if (fromManager?.version) {
+    remoteVersions.push(fromManager.version);
+    updateLink = updateLink ?? fromManager.link;
+  }
 
+  const remoteChangelogs: ReleaseNote[][] = [];
   const changelogResults = await Promise.all(CHANGELOG_MIRRORS.map((url) => fetchJson(bust(url))));
   for (const data of changelogResults) {
     if (!data) continue;
     const parsed = parseChangelog(data);
-    if (parsed.length) {
-      remoteChangelogs.push(parsed);
-      const top = parsed[0]?.version;
-      if (top) remoteVersions.push(top);
-    }
+    if (parsed.length) remoteChangelogs.push(parsed);
   }
 
   const local = parseChangelog(await fetchJson(`chrome://${CHROME_PACKAGE}/content/changelog.json`));
@@ -68,34 +68,36 @@ export async function checkForUpdates(): Promise<UpdateCheck> {
     ? remoteVersions.reduce((best, next) => (compareVersions(next, best) > 0 ? next : best))
     : undefined;
 
+  if (latest && updates) {
+    const match = Array.isArray(updates?.addons?.[ADDON_ID]?.updates)
+      ? updates.addons[ADDON_ID].updates.find((entry: any) => String(entry?.version ?? "") === latest)
+      : undefined;
+    if (match?.update_link) updateLink = String(match.update_link);
+  }
+  if (latest && !updateLink) {
+    updateLink = `https://github.com/${REPOSITORY}/releases/download/v${latest}/memory.xpi`;
+  }
+
   return {
     latest,
+    updateLink,
     remote: remoteVersions.length > 0,
     releases,
   };
 }
 
 /**
- * Installs the newest version listed in `updates.json` through Zotero's add-on manager.
- * Resolves false when the manager finds nothing to install.
+ * Installs an update: first through Zotero's add-on manager, then by downloading the XPI URL.
  */
-export async function installUpdate(): Promise<boolean> {
+export async function installUpdate(updateLink?: string): Promise<boolean> {
   const { AddonManager } = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
-  const addon = await AddonManager.getAddonByID(ADDON_ID);
-  if (!addon) return false;
-  const install = await new Promise<any>((resolve) => {
-    addon.findUpdates(
-      {
-        onUpdateAvailable: (_addon: unknown, found: unknown) => resolve(found),
-        onNoUpdateAvailable: () => resolve(undefined),
-        onUpdateFinished: () => resolve(undefined),
-      },
-      AddonManager.UPDATE_WHEN_USER_REQUESTED,
-    );
-  });
-  if (!install) return false;
-  await install.install();
-  return true;
+
+  const viaManager = await installViaAddonManager(AddonManager);
+  if (viaManager) return true;
+
+  const link = updateLink || (await checkForUpdates()).updateLink;
+  if (!link) return false;
+  return installFromUrl(AddonManager, link);
 }
 
 export function compareVersions(a: string, b: string): number {
@@ -108,37 +110,43 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-function versionFromUpdates(data: any): string | undefined {
+function versionFromUpdates(data: any): { version: string; link?: string } | undefined {
   const updates = data?.addons?.[ADDON_ID]?.updates;
   if (!Array.isArray(updates) || !updates.length) return undefined;
-  return updates
-    .map((entry: any) => String(entry?.version ?? "").replace(/^v/i, ""))
-    .filter(Boolean)
-    .reduce((best: string | undefined, next: string) =>
-      !best || compareVersions(next, best) > 0 ? next : best,
-    undefined);
+  let best: { version: string; link?: string } | undefined;
+  for (const entry of updates) {
+    const version = String(entry?.version ?? "").replace(/^v/i, "");
+    if (!version) continue;
+    if (!best || compareVersions(version, best.version) > 0) {
+      best = {
+        version,
+        link: entry?.update_link ? String(entry.update_link) : undefined,
+      };
+    }
+  }
+  return best;
 }
 
-/** Asks Zotero's own updater (same `update_url` as the XPI) for a newer build. */
-function latestFromAddonManager(): Promise<string | undefined> {
+function latestFromAddonManager(): Promise<{ version: string; link?: string } | undefined> {
   return (async () => {
     try {
       const { AddonManager } = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
       const addon = await AddonManager.getAddonByID(ADDON_ID);
       if (!addon) return undefined;
-      return await new Promise<string | undefined>((resolve) => {
+      return await new Promise((resolve) => {
         let settled = false;
-        const done = (version?: string) => {
+        const done = (value?: { version: string; link?: string }) => {
           if (settled) return;
           settled = true;
-          resolve(version);
+          resolve(value);
         };
-        const timer = setTimeout(() => done(undefined), 10000);
+        const timer = setTimeout(() => done(undefined), 12000);
         addon.findUpdates(
           {
             onUpdateAvailable: (_addon: unknown, install: any) => {
               clearTimeout(timer);
-              done(String(install?.version ?? "").replace(/^v/i, "") || undefined);
+              const version = String(install?.version ?? "").replace(/^v/i, "");
+              done(version ? { version, link: install?.sourceURI?.spec || install?.url } : undefined);
             },
             onNoUpdateAvailable: () => {
               clearTimeout(timer);
@@ -156,6 +164,58 @@ function latestFromAddonManager(): Promise<string | undefined> {
       return undefined;
     }
   })();
+}
+
+async function installViaAddonManager(AddonManager: any): Promise<boolean> {
+  const addon = await AddonManager.getAddonByID(ADDON_ID);
+  if (!addon) return false;
+  const install = await new Promise<any>((resolve) => {
+    let settled = false;
+    const done = (value: any) => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    const timer = setTimeout(() => done(undefined), 12000);
+    addon.findUpdates(
+      {
+        onUpdateAvailable: (_addon: unknown, found: unknown) => {
+          clearTimeout(timer);
+          done(found);
+        },
+        onNoUpdateAvailable: () => {
+          clearTimeout(timer);
+          done(undefined);
+        },
+        onUpdateFinished: () => {
+          clearTimeout(timer);
+          done(undefined);
+        },
+      },
+      AddonManager.UPDATE_WHEN_USER_REQUESTED,
+    );
+  });
+  if (!install) return false;
+  await install.install();
+  return true;
+}
+
+async function installFromUrl(AddonManager: any, url: string): Promise<boolean> {
+  try {
+    const install = await AddonManager.getInstallForURL(url, "application/x-xpinstall");
+    if (!install) return false;
+    await install.install();
+    return true;
+  } catch {
+    try {
+      const install = await AddonManager.getInstallForURL(url);
+      if (!install) return false;
+      await install.install();
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }
 
 function parseChangelog(data: any): ReleaseNote[] {
@@ -212,7 +272,7 @@ async function fetchJson(url: string): Promise<any | undefined> {
         "Cache-Control": "no-cache",
       },
       responseType: "text",
-      timeout: 12000,
+      timeout: 15000,
       noCache: true,
     } as any);
     const text = String((xhr as any).responseText ?? (xhr as any).response ?? "");
