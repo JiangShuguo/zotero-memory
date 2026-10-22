@@ -15,9 +15,9 @@ const PANE_ID = "zotero-prefpane-memory";
 const RECHECK_AFTER_MS = 30 * 60 * 1000;
 
 const CHANGE_LABELS: Record<ChangeKind, string> = {
-  added: "Added",
-  changed: "Improved",
-  fixed: "Fixed",
+  added: "新增",
+  changed: "优化",
+  fixed: "修复",
 };
 
 export interface PaneHost {
@@ -152,11 +152,11 @@ export class PreferencePane {
         } else if (result.remote) {
           this.setUpdate({ kind: "latest" });
         } else {
-          this.setUpdate({ kind: "error", message: "Could not check for updates" });
+          this.setUpdate({ kind: "error", message: "无法检查更新" });
         }
       } catch (error) {
         logError(error);
-        this.setUpdate({ kind: "error", message: "Could not check for updates" });
+        this.setUpdate({ kind: "error", message: "无法检查更新" });
       } finally {
         this.checking = undefined;
       }
@@ -205,11 +205,11 @@ export class PreferencePane {
     const state = this.update;
     const text: Record<UpdateState["kind"], string> = {
       idle: "",
-      checking: "Checking…",
-      latest: "Up to date",
-      available: state.kind === "available" ? `v${state.latest} available` : "",
-      updating: "Installing update…",
-      updated: "Updated — restart Zotero",
+      checking: "检查中…",
+      latest: "已是最新",
+      available: state.kind === "available" ? `发现 v${state.latest}` : "",
+      updating: "正在安装更新…",
+      updated: "已更新，请重启 Zotero",
       error: state.kind === "error" ? state.message : "",
     };
     status.textContent = text[state.kind];
@@ -245,7 +245,7 @@ export class PreferencePane {
     };
     if (!this.releases.length) {
       const message =
-        this.update.kind === "checking" ? "Loading…" : this.update.kind === "error" ? this.update.message : "No releases yet";
+        this.update.kind === "checking" ? "加载中…" : this.update.kind === "error" ? this.update.message : "暂无更新日志";
       list.replaceChildren(make("p", "mem-changelog-empty", message));
       return;
     }
@@ -254,8 +254,8 @@ export class PreferencePane {
       const head = make("div", "mem-release-head");
       head.append(make("span", "mem-release-version", `v${release.version}`));
       const order = compareVersions(release.version, VERSION);
-      if (order === 0) head.append(make("span", "mem-badge mem-badge-current", "Current"));
-      else if (order > 0) head.append(make("span", "mem-badge mem-badge-new", "Available"));
+      if (order === 0) head.append(make("span", "mem-badge mem-badge-current", "当前版本"));
+      else if (order > 0) head.append(make("span", "mem-badge mem-badge-new", "可更新"));
       head.append(make("span", "mem-release-date", formatDate(release.date)));
       const changes = make("ul", "mem-release-changes");
       for (const change of release.changes) {

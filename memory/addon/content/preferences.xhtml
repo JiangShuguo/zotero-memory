@@ -1,13 +1,13 @@
 <vbox id="zotero-prefpane-memory"
       onload="Zotero.Memory?.bindPreferences(window)">
-  <html:header class="mem-hero" data-search-strings-raw="Memory,version,update,changelog">
+  <html:header class="mem-hero" data-search-strings-raw="Memory,版本,更新,更新日志,页边,批注">
     <html:div class="mem-hero-top">
       <html:img class="mem-hero-icon" src="chrome://memory/content/icons/icon@2x.png" alt="" />
       <html:div class="mem-hero-main">
         <html:div class="mem-hero-row">
           <html:h1 class="mem-hero-title">Memory</html:h1>
           <html:div class="mem-update">
-            <html:button type="button" class="mem-icon-button" data-mem-action="check" title="Check for updates" aria-label="Check for updates">
+            <html:button type="button" class="mem-icon-button" data-mem-action="check" title="检查更新" aria-label="检查更新">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true">
                 <path d="M13.2 8A5.2 5.2 0 1 1 11.6 4.3" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
                 <path d="M12.6 1.8v2.9H9.7" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
@@ -15,27 +15,27 @@
             </html:button>
             <html:span class="mem-update-status" data-mem-update-status=""></html:span>
             <html:span class="mem-update-version" data-mem-version=""></html:span>
-            <html:button type="button" class="mem-update-install" data-mem-action="install" hidden="hidden">Update</html:button>
+            <html:button type="button" class="mem-update-install" data-mem-action="install" hidden="hidden">更新</html:button>
             <html:span class="mem-update-divider"></html:span>
             <html:button type="button" class="mem-changelog-toggle" data-mem-action="changelog" aria-expanded="false">
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true">
                 <rect x="3" y="1.8" width="10" height="12.4" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.3" />
                 <path d="M5.8 5.2h4.4M5.8 8h4.4M5.8 10.8h2.6" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" />
               </svg>
-              <html:span>Changelog</html:span>
+              <html:span>更新日志</html:span>
               <svg class="mem-chevron" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true">
                 <path d="M4.5 6.5 8 10l3.5-3.5" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" />
               </svg>
             </html:button>
           </html:div>
         </html:div>
-        <html:p class="mem-hero-tagline">Comment cards beside PDF pages, kept in sync with annotations.</html:p>
+        <html:p class="mem-hero-tagline">在 PDF 页边显示批注卡片，并与 Zotero 批注同步。</html:p>
       </html:div>
     </html:div>
-    <html:section class="mem-changelog" data-mem-changelog="" hidden="hidden" aria-label="Changelog">
+    <html:section class="mem-changelog" data-mem-changelog="" hidden="hidden" aria-label="更新日志">
       <html:div class="mem-changelog-head">
-        <html:h2>Changelog</html:h2>
-        <html:button type="button" class="mem-icon-button" data-mem-action="close-changelog" title="Close" aria-label="Close">
+        <html:h2>更新日志</html:h2>
+        <html:button type="button" class="mem-icon-button" data-mem-action="close-changelog" title="关闭" aria-label="关闭">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" aria-hidden="true">
             <path d="M4 4l8 8M12 4l-8 8" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" />
           </svg>
@@ -45,45 +45,45 @@
     </html:section>
   </html:header>
 
-  <html:section class="mem-panel" data-search-strings-raw="margin,annotation,comment,highlight,underline,note,text,image">
+  <html:section class="mem-panel" data-search-strings-raw="页边,批注,高亮,下划线,便签,文本,图片,区域">
     <html:div class="mem-panel-head">
-      <html:h2 class="mem-panel-title">Show cards for</html:h2>
-      <html:p class="mem-panel-hint">Open PDFs update right away.</html:p>
+      <html:h2 class="mem-panel-title">显示卡片</html:h2>
+      <html:p class="mem-panel-hint">打开的 PDF 会立即生效。</html:p>
     </html:div>
     <html:div class="mem-chips">
       <html:label class="mem-chip">
         <html:input type="checkbox" data-mem-type="highlight" />
-        <html:span>Highlights</html:span>
+        <html:span>高亮</html:span>
       </html:label>
       <html:label class="mem-chip">
         <html:input type="checkbox" data-mem-type="underline" />
-        <html:span>Underlines</html:span>
+        <html:span>下划线</html:span>
       </html:label>
       <html:label class="mem-chip">
         <html:input type="checkbox" data-mem-type="note" />
-        <html:span>Notes</html:span>
+        <html:span>便签</html:span>
       </html:label>
       <html:label class="mem-chip">
         <html:input type="checkbox" data-mem-type="text" />
-        <html:span>Text</html:span>
+        <html:span>文本</html:span>
       </html:label>
       <html:label class="mem-chip">
         <html:input type="checkbox" data-mem-type="image" />
-        <html:span>Images</html:span>
+        <html:span>图片</html:span>
       </html:label>
     </html:div>
   </html:section>
 
-  <html:section class="mem-panel" data-search-strings-raw="export,import,backup,restore,annotation">
+  <html:section class="mem-panel" data-search-strings-raw="导出,导入,备份,还原,批注">
     <html:div class="mem-panel-head">
-      <html:h2 class="mem-panel-title">Backup</html:h2>
+      <html:h2 class="mem-panel-title">备份</html:h2>
       <html:p class="mem-panel-hint">
-        Export every annotation on the selected PDF. Import only works when the target file is byte-identical.
+        导出当前选中 PDF 上的全部批注。仅当目标文件与备份完全一致时才能导入还原。
       </html:p>
     </html:div>
     <html:div class="mem-actions">
-      <html:button type="button" data-mem-action="export">Export annotations…</html:button>
-      <html:button type="button" data-mem-action="import">Import annotations…</html:button>
+      <html:button type="button" data-mem-action="export">导出批注…</html:button>
+      <html:button type="button" data-mem-action="import">导入批注…</html:button>
     </html:div>
   </html:section>
 </vbox>
