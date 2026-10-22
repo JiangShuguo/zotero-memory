@@ -763,7 +763,7 @@ function ensureStyles(doc: Document): void {
   display: grid;
   grid-template-columns: auto 1fr;
   gap: 10px;
-  align-items: start;
+  align-items: center;
   padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid color-mix(in srgb, currentColor 10%, transparent);
@@ -780,7 +780,6 @@ function ensureStyles(doc: Document): void {
   background: color-mix(in srgb, #b42318 5%, transparent);
 }
 #mem-batch-dialog .mem-batch-match-badge {
-  margin-top: 1px;
   min-width: 44px;
   padding: 2px 8px;
   border-radius: 999px;
@@ -790,6 +789,7 @@ function ensureStyles(doc: Document): void {
   letter-spacing: 0.02em;
   line-height: 1.5;
   white-space: nowrap;
+  align-self: center;
 }
 #mem-batch-dialog .mem-batch-match-matched .mem-batch-match-badge {
   background: color-mix(in srgb, #1f6feb 16%, transparent);
