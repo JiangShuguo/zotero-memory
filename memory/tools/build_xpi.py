@@ -15,7 +15,7 @@ BUILD = ROOT / "build"
 OUT = BUILD / "memory.xpi"
 ADDON_ID = "memory@jsg.local"
 # Override with MEMORY_VERSION=1.4.2 when rebuilding an older release XPI.
-VERSION = os.environ.get("MEMORY_VERSION", "1.5.5").strip() or "1.5.5"
+VERSION = os.environ.get("MEMORY_VERSION", "1.5.6").strip() or "1.5.6"
 # Skip rewriting updates.json when packaging an older version via MEMORY_VERSION.
 WRITE_UPDATES = os.environ.get(
     "MEMORY_WRITE_UPDATES",

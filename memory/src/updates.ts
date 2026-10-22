@@ -1,6 +1,20 @@
 import { ADDON_ID, CHROME_PACKAGE, REPOSITORY } from "./constants";
 
 declare const ChromeUtils: { importESModule(path: string): any };
+declare const XMLHttpRequest: {
+  new (): {
+    open(method: string, url: string, async?: boolean): void;
+    send(): void;
+    timeout: number;
+    responseType: string;
+    response: ArrayBuffer | null;
+    status: number;
+    onprogress: ((event: ProgressEvent) => void) | null;
+    onload: (() => void) | null;
+    onerror: (() => void) | null;
+    ontimeout: (() => void) | null;
+  };
+};
 
 export const RELEASES_PAGE = `https://github.com/${REPOSITORY}/releases`;
 
@@ -208,6 +222,17 @@ async function installViaAddonManager(AddonManager: any, onProgress?: UpdateProg
 }
 
 async function installFromUrl(AddonManager: any, url: string, onProgress?: UpdateProgress): Promise<boolean> {
+  // Download ourselves so progress is real (AddonManager often never reports percent).
+  try {
+    const path = await downloadXpi(url, onProgress);
+    if (path) {
+      onProgress?.(0.95);
+      if (await installFromLocalFile(AddonManager, path, onProgress)) return true;
+    }
+  } catch {
+    // fall through to direct URL install
+  }
+
   for (const args of [[url, "application/x-xpinstall"], [url]] as const) {
     try {
       const install = await AddonManager.getInstallForURL(...args);
@@ -220,21 +245,78 @@ async function installFromUrl(AddonManager: any, url: string, onProgress?: Updat
   return false;
 }
 
+async function downloadXpi(url: string, onProgress?: UpdateProgress): Promise<string | undefined> {
+  const PathUtils = (globalThis as any).PathUtils;
+  const IOUtils = (globalThis as any).IOUtils;
+  if (!PathUtils?.join || !IOUtils?.write) return undefined;
+  const dest = PathUtils.join(PathUtils.tempDir, `memory-update-${Date.now()}.xpi`);
+
+  const buffer = await new Promise<ArrayBuffer | undefined>((resolve) => {
+    try {
+      const xhr = new XMLHttpRequest();
+      xhr.open("GET", url, true);
+      xhr.responseType = "arraybuffer";
+      xhr.onprogress = (event) => {
+        if (event.lengthComputable && event.total > 0) {
+          onProgress?.(Math.max(0, Math.min(0.9, (event.loaded / event.total) * 0.9)));
+        }
+      };
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300 && xhr.response) resolve(xhr.response as ArrayBuffer);
+        else resolve(undefined);
+      };
+      xhr.onerror = () => resolve(undefined);
+      xhr.ontimeout = () => resolve(undefined);
+      xhr.timeout = 120000;
+      xhr.send();
+    } catch {
+      resolve(undefined);
+    }
+  });
+  if (!buffer) return undefined;
+  await IOUtils.write(dest, new Uint8Array(buffer));
+  onProgress?.(0.92);
+  return dest;
+}
+
+async function installFromLocalFile(AddonManager: any, path: string, onProgress?: UpdateProgress): Promise<boolean> {
+  try {
+    let file: any;
+    try {
+      file = (Zotero as any).File.pathToFile(path);
+    } catch {
+      file = path;
+    }
+    const install =
+      (await AddonManager.getInstallForFile?.(file)) ??
+      (await AddonManager.getInstallForURL?.(`file://${path.replace(/\\/g, "/")}`, "application/x-xpinstall"));
+    if (!install) return false;
+    return runInstall(install, onProgress);
+  } catch {
+    return false;
+  }
+}
+
 async function runInstall(install: any, onProgress?: UpdateProgress): Promise<boolean> {
+  const report = (source: any) => {
+    const max = Number(source?.maxProgress ?? 0);
+    const current = Number(source?.progress ?? 0);
+    if (max > 0 && Number.isFinite(current)) onProgress?.(Math.max(0, Math.min(1, current / max)));
+  };
   const listener = {
-    onDownloadStarted() {
-      onProgress?.(null);
+    onDownloadStarted(aInstall: any) {
+      report(aInstall ?? install);
     },
-    onDownloadProgress(task: any) {
-      const max = Number(task?.maxProgress ?? task?.progressMax ?? 0);
-      const current = Number(task?.progress ?? 0);
-      if (max > 0 && Number.isFinite(current)) onProgress?.(Math.max(0, Math.min(1, current / max)));
-      else onProgress?.(null);
+    onDownloadProgress(aInstall: any) {
+      report(aInstall ?? install);
     },
     onDownloadEnded() {
-      onProgress?.(1);
+      onProgress?.(0.97);
     },
     onInstallStarted() {
+      onProgress?.(0.98);
+    },
+    onInstallEnded() {
       onProgress?.(1);
     },
   };

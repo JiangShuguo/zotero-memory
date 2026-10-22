@@ -226,16 +226,17 @@ export class PreferencePane {
     if (!status) return;
     const state = this.update;
     // When an update exists, only the Install control carries the new version — no extra status text.
-    const text: Record<UpdateState["kind"], string> = {
-      idle: "",
-      checking: "检查中…",
-      latest: "",
-      available: "",
-      updating: "正在安装…",
-      updated: "已安装，请重启 Zotero",
-      error: state.kind === "error" ? state.message : "",
-    };
-    status.textContent = text[state.kind];
+    let statusText = "";
+    if (state.kind === "checking") statusText = "检查中…";
+    else if (state.kind === "updating") {
+      const fraction = state.progress;
+      statusText =
+        typeof fraction === "number" && Number.isFinite(fraction)
+          ? `正在安装… ${Math.round(Math.max(0, Math.min(1, fraction)) * 100)}%`
+          : "正在安装…";
+    } else if (state.kind === "updated") statusText = "已安装，请重启 Zotero";
+    else if (state.kind === "error") statusText = state.message;
+    status.textContent = statusText;
     status.dataset.state = state.kind;
     if (install) {
       const showInstall = state.kind === "available";

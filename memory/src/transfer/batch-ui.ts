@@ -166,8 +166,9 @@ function renderMatchRow(doc: Document, row: ImportMatchRow): HTMLElement {
   const item = el(doc, "div", `mem-batch-match mem-batch-match-${row.status}`);
   const badge = el(doc, "span", "mem-batch-match-badge");
   badge.textContent = row.status === "matched" ? "匹配" : row.status === "unmatched" ? "未匹配" : "失败";
-  if (row.fileName) badge.title = row.fileName;
-  item.append(badge);
+  const name = el(doc, "div", "mem-batch-match-name", row.fileName);
+  name.title = row.fileName;
+  item.append(badge, name);
   return item;
 }
 
@@ -755,26 +756,40 @@ function ensureStyles(doc: Document): void {
 }
 #mem-batch-dialog .mem-batch-match-list {
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 8px;
 }
 #mem-batch-dialog .mem-batch-match {
-  display: inline-flex;
-  align-items: center;
-  padding: 0;
-  border: none;
-  background: transparent;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: start;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+  background: color-mix(in srgb, currentColor 3%, transparent);
+  box-sizing: border-box;
+}
+#mem-batch-dialog .mem-batch-match-matched {
+  border-color: color-mix(in srgb, #1f6feb 28%, transparent);
+  background: color-mix(in srgb, #1f6feb 5%, transparent);
+}
+#mem-batch-dialog .mem-batch-match-unmatched,
+#mem-batch-dialog .mem-batch-match-error {
+  border-color: color-mix(in srgb, #b42318 28%, transparent);
+  background: color-mix(in srgb, #b42318 5%, transparent);
 }
 #mem-batch-dialog .mem-batch-match-badge {
-  display: inline-block;
+  margin-top: 1px;
   min-width: 44px;
-  padding: 4px 10px;
+  padding: 2px 8px;
   border-radius: 999px;
   text-align: center;
-  font-size: 0.78rem;
+  font-size: 0.72rem;
   font-weight: 650;
   letter-spacing: 0.02em;
-  line-height: 1.45;
+  line-height: 1.5;
+  white-space: nowrap;
 }
 #mem-batch-dialog .mem-batch-match-matched .mem-batch-match-badge {
   background: color-mix(in srgb, #1f6feb 16%, transparent);
@@ -784,6 +799,13 @@ function ensureStyles(doc: Document): void {
 #mem-batch-dialog .mem-batch-match-error .mem-batch-match-badge {
   background: color-mix(in srgb, #b42318 14%, transparent);
   color: #b42318;
+}
+#mem-batch-dialog .mem-batch-match-name {
+  font-size: 0.92rem;
+  font-weight: 600;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 #mem-batch-dialog .mem-batch-empty {
   margin: 24px 8px;
