@@ -225,12 +225,12 @@ export class PreferencePane {
     if (version) version.textContent = `v${VERSION}`;
     if (!status) return;
     const state = this.update;
-    // Keep one version signal: installed `vX.Y.Z` always; never repeat latest in the install label.
+    // When an update exists, only the Install control carries the new version — no extra status text.
     const text: Record<UpdateState["kind"], string> = {
       idle: "",
       checking: "检查中…",
       latest: "",
-      available: state.kind === "available" ? `可更新至 v${state.latest}` : "有可用更新",
+      available: "",
       updating: "正在安装…",
       updated: "已安装，请重启 Zotero",
       error: state.kind === "error" ? state.message : "",
@@ -239,7 +239,7 @@ export class PreferencePane {
     status.dataset.state = state.kind;
     if (install) {
       const showInstall = state.kind === "available";
-      install.textContent = "安装";
+      install.textContent = showInstall ? `安装 v${state.latest}` : "安装";
       if (showInstall) {
         install.hidden = false;
         install.removeAttribute("hidden");

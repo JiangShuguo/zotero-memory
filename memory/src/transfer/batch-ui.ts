@@ -166,28 +166,9 @@ function renderMatchRow(doc: Document, row: ImportMatchRow): HTMLElement {
   const item = el(doc, "div", `mem-batch-match mem-batch-match-${row.status}`);
   const badge = el(doc, "span", "mem-batch-match-badge");
   badge.textContent = row.status === "matched" ? "匹配" : row.status === "unmatched" ? "未匹配" : "失败";
-
-  const main = el(doc, "div", "mem-batch-match-main");
-  const source = el(doc, "div", "mem-batch-match-source", prettyBackupName(row.fileName));
-  source.title = row.fileName;
-
-  const target = el(doc, "div", "mem-batch-match-target");
-  if (row.status === "matched") {
-    target.append(el(doc, "span", "mem-batch-match-rel", "至"));
-    const dest = el(doc, "span", "mem-batch-match-dest", row.targetLabel || "");
-    dest.title = row.targetLabel || "";
-    target.append(dest);
-  } else {
-    target.append(el(doc, "span", "mem-batch-match-dest", row.message || (row.status === "unmatched" ? "未找到对应 PDF" : "无法读取")));
-  }
-
-  main.append(source, target);
-  item.append(badge, main);
+  if (row.fileName) badge.title = row.fileName;
+  item.append(badge);
   return item;
-}
-
-function prettyBackupName(fileName: string): string {
-  return fileName.replace(/-memory-annotations\.json$/i, "").replace(/\.json$/i, "") || fileName;
 }
 
 function svgIcon(doc: Document, pathD: string): SVGElement {
@@ -774,39 +755,26 @@ function ensureStyles(doc: Document): void {
 }
 #mem-batch-dialog .mem-batch-match-list {
   display: flex;
-  flex-direction: column;
+  flex-wrap: wrap;
   gap: 8px;
 }
 #mem-batch-dialog .mem-batch-match {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 10px;
-  min-height: 52px;
-  padding: 10px 12px;
-  border-radius: 10px;
-  border: 1px solid color-mix(in srgb, currentColor 10%, transparent);
-  background: color-mix(in srgb, currentColor 3%, transparent);
-  box-sizing: border-box;
-}
-#mem-batch-dialog .mem-batch-match-matched {
-  border-color: color-mix(in srgb, #1f6feb 28%, transparent);
-  background: color-mix(in srgb, #1f6feb 5%, transparent);
-}
-#mem-batch-dialog .mem-batch-match-unmatched,
-#mem-batch-dialog .mem-batch-match-error {
-  border-color: color-mix(in srgb, #b42318 28%, transparent);
-  background: color-mix(in srgb, #b42318 5%, transparent);
+  padding: 0;
+  border: none;
+  background: transparent;
 }
 #mem-batch-dialog .mem-batch-match-badge {
-  flex: 0 0 auto;
-  min-width: 40px;
-  padding: 2px 8px;
+  display: inline-block;
+  min-width: 44px;
+  padding: 4px 10px;
   border-radius: 999px;
   text-align: center;
-  font-size: 0.72rem;
+  font-size: 0.78rem;
   font-weight: 650;
   letter-spacing: 0.02em;
-  line-height: 1.5;
+  line-height: 1.45;
 }
 #mem-batch-dialog .mem-batch-match-matched .mem-batch-match-badge {
   background: color-mix(in srgb, #1f6feb 16%, transparent);
@@ -816,40 +784,6 @@ function ensureStyles(doc: Document): void {
 #mem-batch-dialog .mem-batch-match-error .mem-batch-match-badge {
   background: color-mix(in srgb, #b42318 14%, transparent);
   color: #b42318;
-}
-#mem-batch-dialog .mem-batch-match-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-#mem-batch-dialog .mem-batch-match-source,
-#mem-batch-dialog .mem-batch-match-dest {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  line-height: 1.35;
-}
-#mem-batch-dialog .mem-batch-match-source {
-  font-size: 0.92rem;
-  font-weight: 600;
-}
-#mem-batch-dialog .mem-batch-match-target {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  font-size: 0.82rem;
-  opacity: 0.72;
-}
-#mem-batch-dialog .mem-batch-match-rel {
-  flex: 0 0 auto;
-  opacity: 0.75;
-}
-#mem-batch-dialog .mem-batch-match-dest {
-  flex: 1;
-  min-width: 0;
 }
 #mem-batch-dialog .mem-batch-empty {
   margin: 24px 8px;

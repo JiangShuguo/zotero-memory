@@ -1,28 +1,46 @@
 {
   "releases": [
     {
+      "version": "1.5.5",
+      "date": "2026-10-22",
+      "changes": [
+        {
+          "kind": "changed",
+          "text": "有可用更新时只显示「安装 v…」，不再旁注提示"
+        },
+        {
+          "kind": "changed",
+          "text": "批量导入匹配结果只显示匹配/未匹配"
+        },
+        {
+          "kind": "changed",
+          "text": "应用内更新日志改为简短中文"
+        }
+      ]
+    },
+    {
       "version": "1.5.4",
       "date": "2026-10-22",
       "changes": [
         {
           "kind": "fixed",
-          "text": "Batch export/import dialogs stay over the preferences window instead of opening behind it"
+          "text": "批量导入/导出弹窗不再被设置窗口挡住"
         },
         {
           "kind": "fixed",
-          "text": "Batch export correctly reads selected PDFs and shows the folder picker from Settings"
+          "text": "批量导出可正确识别勾选并弹出目录选择"
         },
         {
           "kind": "fixed",
-          "text": "Install control is hidden unless an update is available"
+          "text": "仅在有新版本时显示安装入口"
         },
         {
           "kind": "changed",
-          "text": "Update row is quieter: one version signal, text-style Install, clearer progress while installing"
+          "text": "更新区更简洁，安装过程显示进度"
         },
         {
           "kind": "changed",
-          "text": "Progress text says PDF annotations during batch export/import; import match list is cleaner"
+          "text": "批量进度与导入匹配列表展示更清晰"
         }
       ]
     },
@@ -32,11 +50,11 @@
       "changes": [
         {
           "kind": "changed",
-          "text": "Batch export opens a dialog to pick PDFs by collection; batch import lets you choose multiple JSON backups"
+          "text": "批量导出按分类勾选 PDF；批量导入可多选 JSON 备份"
         },
         {
           "kind": "changed",
-          "text": "Removed trailing ellipses from export and import button labels"
+          "text": "导出与导入按钮文案去掉省略号"
         }
       ]
     },
@@ -46,15 +64,15 @@
       "changes": [
         {
           "kind": "changed",
-          "text": "Preferences update controls are quieter; install progress is shown, and a successful install stops further update checks until restart"
+          "text": "设置页更新控件更简洁，显示安装进度；安装成功后本会话不再自动检查"
         },
         {
           "kind": "added",
-          "text": "Preferences can batch-export selected PDFs and batch-import a folder of backups matched by filename or item title"
+          "text": "支持批量导出选中 PDF，并按文件名或题名批量导入备份"
         },
         {
           "kind": "changed",
-          "text": "Preferences copy is more formal; single-PDF export and import remain on the item context menu"
+          "text": "设置页文案更正式；单文件导入导出仍在条目右键菜单"
         }
       ]
     },
@@ -64,11 +82,11 @@
       "changes": [
         {
           "kind": "fixed",
-          "text": "Import/export no longer fails with DataCloneError when reading PDF text across the reader worker boundary"
+          "text": "修复导入导出读取 PDF 文本时的 DataCloneError"
         },
         {
           "kind": "fixed",
-          "text": "Opening a PDF after import no longer shows \"can't access dead object\" from a closed background reader tab"
+          "text": "修复导入后打开 PDF 时出现 dead object 错误"
         }
       ]
     },
@@ -78,15 +96,15 @@
       "changes": [
         {
           "kind": "added",
-          "text": "Importing a backup into a different PDF (publisher vs. arXiv, or an edited file) finds each annotation again by its text"
+          "text": "导入到不同 PDF 时可按文本重新定位批注"
         },
         {
           "kind": "added",
-          "text": "Before importing, lists annotations that cannot be placed and why"
+          "text": "导入前列出无法放置的批注及原因"
         },
         {
           "kind": "changed",
-          "text": "Updates are no longer installed automatically; the preferences show the new version and install it when you click"
+          "text": "更新改为手动安装，不再自动更新"
         }
       ]
     },
@@ -96,11 +114,11 @@
       "changes": [
         {
           "kind": "changed",
-          "text": "Preferences UI is shown in Chinese"
+          "text": "设置页界面改为中文"
         },
         {
           "kind": "fixed",
-          "text": "Update check compares the highest version from GitHub raw, jsDelivr, and the latest release page"
+          "text": "更新检查综合 GitHub 多源取最高版本"
         }
       ]
     },
@@ -110,7 +128,7 @@
       "changes": [
         {
           "kind": "fixed",
-          "text": "Update check no longer trusts AddonManager's stale cache; it takes the newest version from multiple mirrors and installs via the XPI link"
+          "text": "更新检查不再依赖 AddonManager 缓存，改为多源比对并按 XPI 链接安装"
         }
       ]
     },
@@ -120,7 +138,7 @@
       "changes": [
         {
           "kind": "fixed",
-          "text": "Update check no longer trusts a stale CDN copy; it picks the newest version from GitHub raw and other mirrors"
+          "text": "更新检查不再信任过期 CDN，改为多源取最新版本"
         }
       ]
     },
@@ -130,15 +148,15 @@
       "changes": [
         {
           "kind": "added",
-          "text": "Preferences show the installed version, check for updates, and list the changelog"
+          "text": "设置页显示版本、检查更新与更新日志"
         },
         {
           "kind": "changed",
-          "text": "Redesigned the preferences layout and controls"
+          "text": "重做设置页布局与控件"
         },
         {
           "kind": "changed",
-          "text": "Removed Smaller note icons"
+          "text": "移除 Smaller note icons"
         }
       ]
     },
@@ -148,7 +166,7 @@
       "changes": [
         {
           "kind": "added",
-          "text": "Change annotation color from the edit toolbar"
+          "text": "编辑工具栏可更改批注颜色"
         }
       ]
     },
@@ -158,7 +176,7 @@
       "changes": [
         {
           "kind": "added",
-          "text": "Export and import PDF annotation backups; restore all highlights, underlines, and margin comments only when the target PDF is identical"
+          "text": "支持导出与导入 PDF 批注备份（目标 PDF 需一致）"
         }
       ]
     },
@@ -168,7 +186,7 @@
       "changes": [
         {
           "kind": "changed",
-          "text": "When margin cards no longer fit, scroll the column instead of using Show all / Collapse"
+          "text": "页边卡片过多时改为滚动列表，不再使用全部展开/收起"
         }
       ]
     },
@@ -178,7 +196,7 @@
       "changes": [
         {
           "kind": "fixed",
-          "text": "While writing a new comment in Zotero's annotation popup, wait until the popup is closed before showing the margin card"
+          "text": "在 Zotero 批注弹窗中撰写时，关闭后再显示页边卡片"
         }
       ]
     },
@@ -188,23 +206,23 @@
       "changes": [
         {
           "kind": "added",
-          "text": "In-card scrolling for long comments; card height follows the text up to about nine lines"
+          "text": "长批注支持卡片内滚动，高度随内容增长"
         },
         {
           "kind": "added",
-          "text": "Scrollbar tinted with the annotation color—dim when idle, bright while scrolling"
+          "text": "滚动条随批注颜色着色"
         },
         {
           "kind": "added",
-          "text": "Drag to select card text for copy (Ctrl/Cmd+C); click to edit"
+          "text": "可拖选卡片文字复制；单击进入编辑"
         },
         {
           "kind": "changed",
-          "text": "Hide Zotero's annotation popup when a margin card is already shown; annotations without a card still use the built-in popup"
+          "text": "已有页边卡片时隐藏 Zotero 批注弹窗"
         },
         {
           "kind": "changed",
-          "text": "Comments display in full by default (no three-line clamp)"
+          "text": "批注内容默认完整显示"
         }
       ]
     },
@@ -214,23 +232,23 @@
       "changes": [
         {
           "kind": "added",
-          "text": "Comment cards in the PDF margins, with leaders pointing to the marks"
+          "text": "在 PDF 页边显示批注卡片，并连线指向标注"
         },
         {
           "kind": "added",
-          "text": "In-place editing with bold / italic / underline / strikethrough, super/subscript, sizes, and lists"
+          "text": "支持原地编辑与常见富文本格式"
         },
         {
           "kind": "added",
-          "text": "Format toolbar only while editing; card border uses the annotation color"
+          "text": "编辑时显示格式工具栏；卡片边框随批注颜色"
         },
         {
           "kind": "added",
-          "text": "Toolbar toggle, annotation context menu, and annotation type filters"
+          "text": "工具栏开关、批注右键菜单与类型筛选"
         },
         {
           "kind": "added",
-          "text": "Compatible with Zotero 7.x – 10.*"
+          "text": "兼容 Zotero 7.x – 10.*"
         }
       ]
     }
