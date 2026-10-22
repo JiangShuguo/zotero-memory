@@ -23,8 +23,8 @@ const CHANGE_LABELS: Record<ChangeKind, string> = {
 export interface PaneHost {
   settings(): Settings;
   setKind(kind: AnnotationType, visible: boolean): void;
-  batchExportAnnotations(): void;
-  batchImportAnnotations(): void;
+  batchExportAnnotations(ownerWindow?: Window): void;
+  batchImportAnnotations(ownerWindow?: Window): void;
 }
 
 type UpdateState =
@@ -86,9 +86,13 @@ export class PreferencePane {
       box.addEventListener("change", () => this.host.setKind(kind, box.checked));
     });
 
-    const actions: Record<string, () => void> = {
-      "batch-export": () => this.host.batchExportAnnotations(),
-      "batch-import": () => this.host.batchImportAnnotations(),
+    const ownerFromEvent = (event?: Event): Window => {
+      const view = (event?.target as Node | null)?.ownerDocument?.defaultView;
+      return view && !view.closed ? view : win;
+    };
+    const actions: Record<string, (event?: Event) => void> = {
+      "batch-export": (event) => this.host.batchExportAnnotations(ownerFromEvent(event)),
+      "batch-import": (event) => this.host.batchImportAnnotations(ownerFromEvent(event)),
       check: () => void this.check(true),
       install: () => void this.install(),
       changelog: () => this.toggleChangelog(root),
@@ -96,7 +100,7 @@ export class PreferencePane {
     };
     root.querySelectorAll<HTMLElement>("[data-mem-action]").forEach((button) => {
       const action = actions[button.dataset.memAction ?? ""];
-      if (action) button.addEventListener("click", action);
+      if (action) button.addEventListener("click", (event) => action(event));
     });
     doc.addEventListener("keydown", (event) => {
       if (event.key === "Escape") this.toggleChangelog(root, false);
@@ -221,11 +225,12 @@ export class PreferencePane {
     if (version) version.textContent = `v${VERSION}`;
     if (!status) return;
     const state = this.update;
+    // Keep one version signal: installed `vX.Y.Z` always; never repeat latest in the install label.
     const text: Record<UpdateState["kind"], string> = {
       idle: "",
       checking: "检查中…",
-      latest: "已是最新",
-      available: "有可用更新",
+      latest: "",
+      available: state.kind === "available" ? `可更新至 v${state.latest}` : "有可用更新",
       updating: "正在安装…",
       updated: "已安装，请重启 Zotero",
       error: state.kind === "error" ? state.message : "",
@@ -233,8 +238,15 @@ export class PreferencePane {
     status.textContent = text[state.kind];
     status.dataset.state = state.kind;
     if (install) {
-      install.hidden = state.kind !== "available";
-      if (state.kind === "available") install.textContent = `安装 v${state.latest}`;
+      const showInstall = state.kind === "available";
+      install.textContent = "安装";
+      if (showInstall) {
+        install.hidden = false;
+        install.removeAttribute("hidden");
+      } else {
+        install.hidden = true;
+        install.setAttribute("hidden", "true");
+      }
     }
     if (check) {
       check.disabled = state.kind === "checking" || state.kind === "updating" || state.kind === "updated";
@@ -242,7 +254,13 @@ export class PreferencePane {
     }
     if (progress && bar) {
       const showing = state.kind === "updating";
-      progress.hidden = !showing;
+      if (showing) {
+        progress.removeAttribute("hidden");
+        progress.hidden = false;
+      } else {
+        progress.setAttribute("hidden", "true");
+        progress.hidden = true;
+      }
       progress.setAttribute("aria-hidden", String(!showing));
       if (showing) {
         const fraction = state.progress;

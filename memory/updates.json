@@ -3,8 +3,8 @@
     "memory@jsg.local": {
       "updates": [
         {
-          "version": "1.5.3",
-          "update_link": "https://github.com/JiangShuguo/zotero-memory/releases/download/v1.5.3/memory.xpi",
+          "version": "1.5.4",
+          "update_link": "https://github.com/JiangShuguo/zotero-memory/releases/download/v1.5.4/memory.xpi",
           "applications": {
             "zotero": {
               "strict_min_version": "6.999",

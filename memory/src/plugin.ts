@@ -32,8 +32,8 @@ export class MemoryPlugin {
   private readonly pane = new PreferencePane({
     settings: () => this.settings,
     setKind: (kind, visible) => this.setKind(kind, visible),
-    batchExportAnnotations: () => void batchExportAnnotations(),
-    batchImportAnnotations: () => void this.batchImportAnnotations(),
+    batchExportAnnotations: (ownerWindow) => void batchExportAnnotations(ownerWindow),
+    batchImportAnnotations: (ownerWindow) => void this.batchImportAnnotations(ownerWindow),
   });
   private settings: Settings = readSettings();
   private notifierID?: string;
@@ -149,8 +149,8 @@ export class MemoryPlugin {
     return importAnnotations(() => this.refreshSessions());
   }
 
-  private batchImportAnnotations(): Promise<void> {
-    return batchImportAnnotations(() => this.refreshSessions());
+  private batchImportAnnotations(ownerWindow?: Window): Promise<void> {
+    return batchImportAnnotations(() => this.refreshSessions(), ownerWindow);
   }
 
   private bindItemMenu(win: Window): void {

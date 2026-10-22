@@ -26,33 +26,50 @@ export interface ImportMatchRow {
   message?: string;
 }
 
-/** Opens a collection-folded PDF picker. Resolves to selected attachment IDs, or undefined if cancelled. */
-export async function choosePdfsForExport(): Promise<number[] | undefined> {
+export interface ExportSelection {
+  ids: number[];
+  folder: string;
+}
+
+/** Opens a collection-folded PDF picker, then a folder picker. Cancel at either step returns undefined. */
+export async function choosePdfsForExport(ownerWindow?: Window): Promise<ExportSelection | undefined> {
   const tree = await buildExportTree();
   if (!tree.length || !countPdfs(tree)) {
-    return [];
+    const { alertUser } = await import("./dialogs");
+    alertUser("Memory", "文库中没有可导出的 PDF。", ownerWindow);
+    return undefined;
   }
-  return showModal<number[] | undefined>({
-    title: "批量导出",
-    hint: "按分类展开后勾选 PDF，再点击导出。",
-    buildBody(doc, panel) {
-      const treeEl = el(doc, "div", "mem-batch-tree");
-      for (const node of tree) treeEl.append(renderFolder(doc, node, true));
-      panel.append(treeEl);
+  return showModal<ExportSelection>(
+    {
+      title: "批量导出",
+      buildBody(doc, panel) {
+        const treeEl = el(doc, "div", "mem-batch-tree");
+        for (const node of tree) treeEl.append(renderFolder(doc, node, true));
+        panel.append(treeEl);
+      },
+      primaryLabel: "导出",
+      onPrimary(root) {
+        return { ids: collectCheckedPdfIds(root), folder: "" };
+      },
+      validatePrimary(selection) {
+        if (!selection?.ids.length) return "请先勾选要导出的 PDF。";
+        return undefined;
+      },
+      async afterValidate(selection, host, overlay) {
+        const { chooseBackupFolder } = await import("./dialogs");
+        // Native file dialogs can sit behind a full-window overlay; hide it while picking.
+        overlay.style.visibility = "hidden";
+        try {
+          const folder = await chooseBackupFolder("选择导出目录", host);
+          if (!folder) return undefined;
+          return { ids: selection.ids, folder };
+        } finally {
+          overlay.style.visibility = "";
+        }
+      },
     },
-    primaryLabel: "导出",
-    onPrimary(root) {
-      const ids = Array.from(root.querySelectorAll("input[data-mem-pdf]:checked"))
-        .filter((node): node is HTMLInputElement => node instanceof HTMLInputElement)
-        .map((box) => Number(box.dataset.memPdf))
-        .filter((id) => Number.isFinite(id));
-      return [...new Set(ids)];
-    },
-    validatePrimary(selection) {
-      if (!selection?.length) return "请先勾选要导出的 PDF。";
-      return undefined;
-    },
-  });
+    ownerWindow,
+  );
 }
 
 /**
@@ -61,70 +78,131 @@ export async function choosePdfsForExport(): Promise<number[] | undefined> {
  */
 export async function chooseJsonFilesForImport(
   preview: (paths: string[]) => Promise<ImportMatchRow[]>,
+  ownerWindow?: Window,
 ): Promise<string[] | undefined> {
   let rows: ImportMatchRow[] = [];
-  return showModal<string[] | undefined>({
-    title: "批量导入",
-    hint: "选择多个备份 JSON 文件，系统将按文件名或条目题名匹配对应论文。",
-    buildBody(doc, panel, api) {
-      const toolbar = el(doc, "div", "mem-batch-toolbar");
-      const pick = el(doc, "button", "mem-batch-secondary", "选择 JSON 文件") as HTMLButtonElement;
-      pick.type = "button";
-      const summary = el(doc, "span", "mem-batch-summary", "尚未选择文件");
-      toolbar.append(pick, summary);
-      const list = el(doc, "div", "mem-batch-match-list");
-      list.append(el(doc, "p", "mem-batch-empty", "请先选择备份文件。"));
-      panel.append(toolbar, list);
+  return showModal<string[] | undefined>(
+    {
+      title: "批量导入",
+      buildBody(doc, panel, api) {
+        const toolbar = el(doc, "div", "mem-batch-toolbar");
+        const pick = el(doc, "button", "mem-batch-pick") as HTMLButtonElement;
+        pick.type = "button";
+        pick.append(
+          svgIcon(
+            doc,
+            "M3.5 4.5h4l1.2 1.5H12.5a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1V5.5a1 1 0 0 1 1-1z",
+          ),
+          doc.createTextNode("选择 JSON 文件"),
+        );
+        const summary = el(doc, "span", "mem-batch-summary", "尚未选择文件");
+        toolbar.append(pick, summary);
+        const list = el(doc, "div", "mem-batch-match-list");
+        list.append(el(doc, "p", "mem-batch-empty", "请先选择备份文件。"));
+        panel.append(toolbar, list);
 
-      pick.addEventListener("click", () => {
-        void (async () => {
-          const { chooseBackupOpenPaths } = await import("./dialogs");
-          const paths = await chooseBackupOpenPaths();
-          if (!paths?.length) return;
-          pick.disabled = true;
-          summary.textContent = "正在匹配…";
-          list.replaceChildren(el(doc, "p", "mem-batch-empty", "正在匹配…"));
-          try {
-            rows = await preview(paths);
-          } catch (error) {
-            logError(error);
-            rows = paths.map((path) => ({
-              path,
-              fileName: path.replace(/^.*[\\/]/, ""),
-              status: "error" as const,
-              message: error instanceof Error ? error.message : String(error),
-            }));
-          } finally {
-            pick.disabled = false;
-          }
-          const matched = rows.filter((row) => row.status === "matched").length;
-          summary.textContent = `已选 ${rows.length} 个文件，匹配 ${matched} 个`;
-          list.replaceChildren(...rows.map((row) => renderMatchRow(doc, row)));
-          api.refresh();
-        })();
-      });
+        pick.addEventListener("click", () => {
+          void (async () => {
+            const backdrop = doc.getElementById("mem-batch-dialog") as HTMLElement | null;
+            if (backdrop) backdrop.style.visibility = "hidden";
+            let paths: string[] | undefined;
+            try {
+              const { chooseBackupOpenPaths } = await import("./dialogs");
+              paths = await chooseBackupOpenPaths(ownerWindow);
+            } finally {
+              if (backdrop) backdrop.style.visibility = "";
+            }
+            if (!paths?.length) return;
+            pick.disabled = true;
+            summary.textContent = "正在匹配…";
+            list.replaceChildren(el(doc, "p", "mem-batch-empty", "正在匹配…"));
+            try {
+              rows = await preview(paths);
+            } catch (error) {
+              logError(error);
+              rows = paths.map((path) => ({
+                path,
+                fileName: path.replace(/^.*[\\/]/, ""),
+                status: "error" as const,
+                message: error instanceof Error ? error.message : String(error),
+              }));
+            } finally {
+              pick.disabled = false;
+            }
+            const matched = rows.filter((row) => row.status === "matched").length;
+            summary.textContent = `已选 ${rows.length} 个文件，匹配 ${matched} 个`;
+            list.replaceChildren(...rows.map((row) => renderMatchRow(doc, row)));
+            api.refresh();
+          })();
+        });
+      },
+      primaryLabel: "导入",
+      onPrimary() {
+        return rows.filter((row) => row.status === "matched").map((row) => row.path);
+      },
+      validatePrimary(selection) {
+        if (!rows.length) return "请先选择备份文件。";
+        if (!selection?.length) return "没有可导入的匹配项。";
+        return undefined;
+      },
     },
-    primaryLabel: "导入",
-    onPrimary() {
-      return rows.filter((row) => row.status === "matched").map((row) => row.path);
-    },
-    validatePrimary(selection) {
-      if (!rows.length) return "请先选择备份文件。";
-      if (!selection?.length) return "没有可导入的匹配项。";
-      return undefined;
-    },
-  });
+    ownerWindow,
+  );
+}
+
+/** Avoid `instanceof HTMLInputElement` — it fails across XUL/HTML document realms. */
+function collectCheckedPdfIds(root: ParentNode): number[] {
+  const ids: number[] = [];
+  for (const node of Array.from(root.querySelectorAll("input[data-mem-pdf]"))) {
+    const input = node as HTMLInputElement;
+    if (!input.checked) continue;
+    const id = Number(input.getAttribute("data-mem-pdf") || "");
+    if (Number.isFinite(id)) ids.push(id);
+  }
+  return [...new Set(ids)];
 }
 
 function renderMatchRow(doc: Document, row: ImportMatchRow): HTMLElement {
   const item = el(doc, "div", `mem-batch-match mem-batch-match-${row.status}`);
-  const name = el(doc, "div", "mem-batch-match-name", row.fileName);
-  let detail = "";
-  if (row.status === "matched") detail = `→ ${row.targetLabel ?? ""}`;
-  else if (row.status === "unmatched") detail = row.message || "未找到匹配的 PDF";
-  else detail = row.message || "无法读取";
-  item.append(name, el(doc, "div", "mem-batch-match-detail", detail));
+  const badge = el(doc, "span", "mem-batch-match-badge");
+  badge.textContent = row.status === "matched" ? "匹配" : row.status === "unmatched" ? "未匹配" : "失败";
+
+  const main = el(doc, "div", "mem-batch-match-main");
+  const source = el(doc, "div", "mem-batch-match-source", prettyBackupName(row.fileName));
+  source.title = row.fileName;
+
+  const target = el(doc, "div", "mem-batch-match-target");
+  if (row.status === "matched") {
+    target.append(el(doc, "span", "mem-batch-match-rel", "至"));
+    const dest = el(doc, "span", "mem-batch-match-dest", row.targetLabel || "");
+    dest.title = row.targetLabel || "";
+    target.append(dest);
+  } else {
+    target.append(el(doc, "span", "mem-batch-match-dest", row.message || (row.status === "unmatched" ? "未找到对应 PDF" : "无法读取")));
+  }
+
+  main.append(source, target);
+  item.append(badge, main);
   return item;
+}
+
+function prettyBackupName(fileName: string): string {
+  return fileName.replace(/-memory-annotations\.json$/i, "").replace(/\.json$/i, "") || fileName;
+}
+
+function svgIcon(doc: Document, pathD: string): SVGElement {
+  const svg = doc.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("aria-hidden", "true");
+  svg.classList.add("mem-batch-pick-icon");
+  const path = doc.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", pathD);
+  path.setAttribute("fill", "none");
+  path.setAttribute("stroke", "currentColor");
+  path.setAttribute("stroke-width", "1.3");
+  path.setAttribute("stroke-linejoin", "round");
+  svg.append(path);
+  return svg;
 }
 
 function renderFolder(doc: Document, node: ExportFolderNode, collapsed: boolean): HTMLElement {
@@ -139,7 +217,7 @@ function renderFolder(doc: Document, node: ExportFolderNode, collapsed: boolean)
 
   const select = el(doc, "input") as HTMLInputElement;
   select.type = "checkbox";
-  select.className = "mem-batch-folder-check";
+  select.className = "mem-batch-check mem-batch-folder-check";
   select.title = "全选此分类";
 
   const title = el(doc, "span", "mem-batch-folder-title", node.name);
@@ -151,37 +229,42 @@ function renderFolder(doc: Document, node: ExportFolderNode, collapsed: boolean)
   for (const child of node.children) body.append(renderFolder(doc, child, true));
   for (const pdf of node.pdfs) {
     const row = el(doc, "label", "mem-batch-pdf");
+    const spacer = el(doc, "span", "mem-batch-row-spacer");
     const box = el(doc, "input") as HTMLInputElement;
     box.type = "checkbox";
-    box.dataset.memPdf = String(pdf.id);
+    box.className = "mem-batch-check";
+    box.setAttribute("data-mem-pdf", String(pdf.id));
     const text = el(doc, "span", "mem-batch-pdf-text");
     text.append(el(doc, "span", "mem-batch-pdf-label", pdf.label));
     if (pdf.detail && pdf.detail !== pdf.label) {
       text.append(el(doc, "span", "mem-batch-pdf-detail", pdf.detail));
     }
-    row.append(box, text);
+    row.append(spacer, box, text);
     body.append(row);
   }
 
   toggle.addEventListener("click", (event) => {
     event.preventDefault();
+    event.stopPropagation();
     const next = folder.dataset.collapsed !== "true";
     folder.dataset.collapsed = String(next);
     toggle.textContent = next ? "▸" : "▾";
   });
 
   select.addEventListener("change", () => {
-    body.querySelectorAll<HTMLInputElement>("input[data-mem-pdf]").forEach((box) => {
-      box.checked = select.checked;
+    body.querySelectorAll("input[data-mem-pdf]").forEach((node) => {
+      (node as HTMLInputElement).checked = select.checked;
     });
-    body.querySelectorAll<HTMLInputElement>("input.mem-batch-folder-check").forEach((box) => {
+    body.querySelectorAll("input.mem-batch-folder-check").forEach((node) => {
+      const box = node as HTMLInputElement;
       box.checked = select.checked;
       box.indeterminate = false;
     });
   });
 
   body.addEventListener("change", (event) => {
-    if (!(event.target instanceof HTMLInputElement)) return;
+    const target = event.target as Element | null;
+    if (!target || target.localName !== "input") return;
     syncFolderCheck(folder);
   });
 
@@ -190,10 +273,8 @@ function renderFolder(doc: Document, node: ExportFolderNode, collapsed: boolean)
 }
 
 function syncFolderCheck(folder: HTMLElement): void {
-  const select = folder.querySelector<HTMLInputElement>(":scope > .mem-batch-folder-head > .mem-batch-folder-check");
-  const boxes = Array.from(folder.querySelectorAll("input[data-mem-pdf]")).filter(
-    (node): node is HTMLInputElement => node instanceof HTMLInputElement,
-  );
+  const select = folder.querySelector(":scope > .mem-batch-folder-head > .mem-batch-folder-check") as HTMLInputElement | null;
+  const boxes = Array.from(folder.querySelectorAll("input[data-mem-pdf]")) as HTMLInputElement[];
   if (!select || !boxes.length) return;
   const checked = boxes.filter((box) => box.checked).length;
   select.checked = checked === boxes.length;
@@ -312,15 +393,18 @@ function countPdfs(nodes: ExportFolderNode[]): number {
 
 interface ModalOptions<T> {
   title: string;
-  hint: string;
+  hint?: string;
   primaryLabel: string;
   buildBody(doc: Document, panel: HTMLElement, api: { refresh(): void }): void;
   onPrimary(root: HTMLElement): T;
   validatePrimary?(value: T): string | undefined;
+  /** Runs after validation; return a value to close, or undefined to keep the dialog open. */
+  afterValidate?(value: T, hostWindow: Window, overlay: HTMLElement): Promise<T | undefined>;
 }
 
-function showModal<T>(options: ModalOptions<T>): Promise<T | undefined> {
-  const win = mainWindow();
+function showModal<T>(options: ModalOptions<T>, ownerWindow?: Window): Promise<T | undefined> {
+  // Prefer the preferences pane window so the dialog is not buried under Settings.
+  const win = resolveHostWindow(ownerWindow);
   if (!win) return Promise.resolve(undefined);
   const doc = win.document;
   ensureStyles(doc);
@@ -338,12 +422,13 @@ function showModal<T>(options: ModalOptions<T>): Promise<T | undefined> {
 
     const head = el(doc, "div", "mem-batch-head");
     head.append(el(doc, "h1", "mem-batch-title", options.title));
-    head.append(el(doc, "p", "mem-batch-hint", options.hint));
+    if (options.hint) head.append(el(doc, "p", "mem-batch-hint", options.hint));
 
     const body = el(doc, "div", "mem-batch-body");
     const foot = el(doc, "div", "mem-batch-foot");
     const error = el(doc, "div", "mem-batch-error");
     error.hidden = true;
+    error.setAttribute("hidden", "true");
     const cancel = el(doc, "button", "mem-batch-ghost", "取消") as HTMLButtonElement;
     cancel.type = "button";
     const primary = el(doc, "button", "mem-batch-primary", options.primaryLabel) as HTMLButtonElement;
@@ -353,38 +438,71 @@ function showModal<T>(options: ModalOptions<T>): Promise<T | undefined> {
     dialog.append(head, body, foot);
     backdrop.append(dialog);
 
+    let busy = false;
     const close = (value: T | undefined) => {
       doc.removeEventListener("keydown", onKey);
       backdrop.remove();
       resolve(value);
     };
 
+    const showError = (message: string) => {
+      error.hidden = false;
+      error.removeAttribute("hidden");
+      error.textContent = message;
+    };
+
     const api = {
       refresh() {
         error.hidden = true;
+        error.setAttribute("hidden", "true");
         error.textContent = "";
       },
     };
 
     options.buildBody(doc, body, api);
 
-    cancel.addEventListener("click", () => close(undefined));
-    backdrop.addEventListener("click", (event) => {
-      if (event.target === backdrop) close(undefined);
+    cancel.addEventListener("click", () => {
+      if (!busy) close(undefined);
     });
-    primary.addEventListener("click", () => {
-      const value = options.onPrimary(dialog);
-      const message = options.validatePrimary?.(value);
-      if (message) {
-        error.hidden = false;
-        error.textContent = message;
-        return;
-      }
-      close(value);
+    backdrop.addEventListener("click", (event) => {
+      if (!busy && event.target === backdrop) close(undefined);
+    });
+    primary.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      void (async () => {
+        if (busy) return;
+        const value = options.onPrimary(dialog);
+        const message = options.validatePrimary?.(value);
+        if (message) {
+          showError(message);
+          return;
+        }
+        api.refresh();
+        if (!options.afterValidate) {
+          close(value);
+          return;
+        }
+        busy = true;
+        primary.disabled = true;
+        cancel.disabled = true;
+        try {
+          const next = await options.afterValidate(value, win, backdrop);
+          if (next === undefined) return;
+          close(next);
+        } catch (err) {
+          logError(err);
+          showError(err instanceof Error ? err.message : String(err));
+        } finally {
+          busy = false;
+          primary.disabled = false;
+          cancel.disabled = false;
+        }
+      })();
     });
 
     const onKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !busy) {
         event.preventDefault();
         close(undefined);
       }
@@ -404,19 +522,65 @@ function el(doc: Document, tag: string, className?: string, text?: string): HTML
   return node;
 }
 
+/**
+ * Host the overlay inside the preferences UI — never the library main window,
+ * or the dialog appears behind the Settings window.
+ *
+ * Prefer: click-owner pane → Memory pane inside `zotero:pref` → prefs chrome → main.
+ */
+function resolveHostWindow(ownerWindow?: Window): Window | undefined {
+  if (ownerWindow && !ownerWindow.closed) return ownerWindow;
+
+  try {
+    const prefs = (Services as any).wm?.getMostRecentWindow?.("zotero:pref");
+    if (prefs && !prefs.closed) {
+      const pane = findMemoryPaneWindow(prefs);
+      if (pane) return pane;
+      return prefs;
+    }
+  } catch {
+    // Services may be unavailable in some scopes
+  }
+
+  return mainWindow();
+}
+
+function findMemoryPaneWindow(prefsWin: Window): Window | undefined {
+  try {
+    const doc = prefsWin.document;
+    for (const browser of Array.from(doc.getElementsByTagName("browser"))) {
+      const content = (browser as any).contentWindow as Window | null;
+      if (content?.document?.getElementById?.("zotero-prefpane-memory")) return content;
+    }
+    for (const iframe of Array.from(doc.getElementsByTagName("iframe"))) {
+      const content = (iframe as HTMLIFrameElement).contentWindow;
+      if (content?.document?.getElementById?.("zotero-prefpane-memory")) return content;
+    }
+  } catch {
+    // ignore
+  }
+  return undefined;
+}
+
 function mainWindow(): any {
   return (Zotero as any).getMainWindow?.() ?? (Zotero as any).getActiveZoteroPane?.()?.document?.defaultView;
 }
 
+declare const Services: {
+  wm: {
+    getMostRecentWindow(type: string | null): Window | null;
+  };
+};
+
 function ensureStyles(doc: Document): void {
-  if (doc.getElementById(STYLE_ID)) return;
+  doc.getElementById(STYLE_ID)?.remove();
   const style = doc.createElementNS(HTML, "style") as HTMLStyleElement;
   style.id = STYLE_ID;
   style.textContent = `
 #mem-batch-dialog.mem-batch-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 99999;
+  z-index: 2147483646;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -467,6 +631,10 @@ function ensureStyles(doc: Document): void {
   margin-right: auto;
   color: #b42318;
   font-size: 0.88rem;
+  max-width: 55%;
+}
+#mem-batch-dialog .mem-batch-error[hidden] {
+  display: none !important;
 }
 #mem-batch-dialog button {
   appearance: none;
@@ -482,8 +650,36 @@ function ensureStyles(doc: Document): void {
   background: #1f6feb;
   color: #fff;
 }
+#mem-batch-dialog .mem-batch-primary:disabled,
+#mem-batch-dialog .mem-batch-ghost:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
 #mem-batch-dialog .mem-batch-secondary {
   background: color-mix(in srgb, currentColor 6%, transparent);
+}
+#mem-batch-dialog .mem-batch-pick {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border: 1px solid color-mix(in srgb, #1f6feb 28%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, #1f6feb 8%, transparent);
+  color: #1f6feb;
+  font-weight: 600;
+}
+#mem-batch-dialog .mem-batch-pick:hover {
+  background: color-mix(in srgb, #1f6feb 14%, transparent);
+}
+#mem-batch-dialog .mem-batch-pick:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+#mem-batch-dialog .mem-batch-pick-icon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
 }
 #mem-batch-dialog .mem-batch-ghost {
   opacity: 0.85;
@@ -491,29 +687,45 @@ function ensureStyles(doc: Document): void {
 #mem-batch-dialog .mem-batch-tree {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
-#mem-batch-dialog .mem-batch-folder-head {
+#mem-batch-dialog .mem-batch-folder-head,
+#mem-batch-dialog .mem-batch-pdf {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  min-height: 28px;
   padding: 4px 6px;
-  border-radius: 8px;
+  border-radius: 6px;
+  box-sizing: border-box;
 }
-#mem-batch-dialog .mem-batch-folder-head:hover {
-  background: color-mix(in srgb, currentColor 6%, transparent);
+#mem-batch-dialog .mem-batch-folder-head:hover,
+#mem-batch-dialog .mem-batch-pdf:hover {
+  background: color-mix(in srgb, currentColor 5%, transparent);
 }
-#mem-batch-dialog .mem-batch-folder-toggle {
-  width: 22px;
-  height: 22px;
+#mem-batch-dialog .mem-batch-folder-toggle,
+#mem-batch-dialog .mem-batch-row-spacer {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
   padding: 0;
   border: none;
   background: transparent;
-  line-height: 1;
+  line-height: 18px;
+  text-align: center;
+}
+#mem-batch-dialog .mem-batch-check,
+#mem-batch-dialog input[type="checkbox"] {
+  width: 14px !important;
+  height: 14px !important;
+  margin: 0 !important;
+  flex: 0 0 14px;
+  accent-color: #1f6feb;
 }
 #mem-batch-dialog .mem-batch-folder-title {
   flex: 1;
   font-weight: 600;
+  line-height: 1.3;
 }
 #mem-batch-dialog .mem-batch-folder-count {
   min-width: 1.4em;
@@ -522,7 +734,7 @@ function ensureStyles(doc: Document): void {
   opacity: 0.55;
 }
 #mem-batch-dialog .mem-batch-folder-body {
-  margin-left: 14px;
+  margin-left: 9px;
   padding-left: 10px;
   border-left: 1px solid color-mix(in srgb, currentColor 12%, transparent);
 }
@@ -530,67 +742,114 @@ function ensureStyles(doc: Document): void {
   display: none;
 }
 #mem-batch-dialog .mem-batch-pdf {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 5px 6px;
-  border-radius: 8px;
   cursor: pointer;
-}
-#mem-batch-dialog .mem-batch-pdf:hover {
-  background: color-mix(in srgb, currentColor 5%, transparent);
 }
 #mem-batch-dialog .mem-batch-pdf-text {
   display: flex;
   flex-direction: column;
   gap: 1px;
   min-width: 0;
+  flex: 1;
 }
 #mem-batch-dialog .mem-batch-pdf-label {
-  line-height: 1.35;
+  line-height: 1.3;
 }
 #mem-batch-dialog .mem-batch-pdf-detail {
-  font-size: 0.82rem;
+  font-size: 0.8rem;
   opacity: 0.58;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  line-height: 1.25;
 }
 #mem-batch-dialog .mem-batch-toolbar {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
+  gap: 12px;
+  margin-bottom: 12px;
 }
 #mem-batch-dialog .mem-batch-summary {
   font-size: 0.9rem;
-  opacity: 0.7;
+  opacity: 0.68;
 }
 #mem-batch-dialog .mem-batch-match-list {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 #mem-batch-dialog .mem-batch-match {
-  padding: 8px 10px;
-  border-radius: 8px;
-  background: color-mix(in srgb, currentColor 4%, transparent);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 52px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, currentColor 10%, transparent);
+  background: color-mix(in srgb, currentColor 3%, transparent);
+  box-sizing: border-box;
 }
 #mem-batch-dialog .mem-batch-match-matched {
-  border-left: 3px solid #1f6feb;
+  border-color: color-mix(in srgb, #1f6feb 28%, transparent);
+  background: color-mix(in srgb, #1f6feb 5%, transparent);
 }
 #mem-batch-dialog .mem-batch-match-unmatched,
 #mem-batch-dialog .mem-batch-match-error {
-  border-left: 3px solid #b42318;
+  border-color: color-mix(in srgb, #b42318 28%, transparent);
+  background: color-mix(in srgb, #b42318 5%, transparent);
 }
-#mem-batch-dialog .mem-batch-match-name {
+#mem-batch-dialog .mem-batch-match-badge {
+  flex: 0 0 auto;
+  min-width: 40px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  line-height: 1.5;
+}
+#mem-batch-dialog .mem-batch-match-matched .mem-batch-match-badge {
+  background: color-mix(in srgb, #1f6feb 16%, transparent);
+  color: #1f6feb;
+}
+#mem-batch-dialog .mem-batch-match-unmatched .mem-batch-match-badge,
+#mem-batch-dialog .mem-batch-match-error .mem-batch-match-badge {
+  background: color-mix(in srgb, #b42318 14%, transparent);
+  color: #b42318;
+}
+#mem-batch-dialog .mem-batch-match-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+#mem-batch-dialog .mem-batch-match-source,
+#mem-batch-dialog .mem-batch-match-dest {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.35;
+}
+#mem-batch-dialog .mem-batch-match-source {
+  font-size: 0.92rem;
   font-weight: 600;
-  word-break: break-all;
 }
-#mem-batch-dialog .mem-batch-match-detail {
-  margin-top: 2px;
-  font-size: 0.86rem;
+#mem-batch-dialog .mem-batch-match-target {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 0.82rem;
   opacity: 0.72;
+}
+#mem-batch-dialog .mem-batch-match-rel {
+  flex: 0 0 auto;
+  opacity: 0.75;
+}
+#mem-batch-dialog .mem-batch-match-dest {
+  flex: 1;
+  min-width: 0;
 }
 #mem-batch-dialog .mem-batch-empty {
   margin: 24px 8px;

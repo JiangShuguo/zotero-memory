@@ -11,7 +11,6 @@ import {
 import { chooseJsonFilesForImport, choosePdfsForExport, type ImportMatchRow } from "./batch-ui";
 import {
   alertUser,
-  chooseBackupFolder,
   chooseBackupOpenPath,
   chooseBackupSavePath,
   confirmUser,
@@ -89,24 +88,18 @@ export async function importAnnotations(onImported: () => void): Promise<void> {
 }
 
 /** Opens a collection-folded PDF picker, then writes backups into a chosen folder. */
-export async function batchExportAnnotations(): Promise<void> {
+export async function batchExportAnnotations(ownerWindow?: Window): Promise<void> {
   try {
-    const ids = await choosePdfsForExport();
-    if (ids === undefined) return;
-    if (!ids.length) {
-      alertUser("Memory", "文库中没有可导出的 PDF。");
-      return;
-    }
-    const attachments = ids
+    const selection = await choosePdfsForExport(ownerWindow);
+    if (!selection) return;
+    const attachments = selection.ids
       .map((id) => (Zotero as any).Items.get(id))
       .filter((item: any) => item?.isPDFAttachment?.());
     if (!attachments.length) {
-      alertUser("Memory", "所选条目中没有有效的 PDF 附件。");
+      alertUser("Memory", "所选条目中没有有效的 PDF 附件。", ownerWindow);
       return;
     }
-    const folder = await chooseBackupFolder("选择导出目录");
-    if (!folder) return;
-    const done = showProgress(`正在导出 ${attachments.length} 个 PDF…`);
+    const done = showProgress(`正在导出 ${attachments.length} 个 PDF 标注`);
     let exported = 0;
     const failures: string[] = [];
     try {
@@ -115,7 +108,7 @@ export async function batchExportAnnotations(): Promise<void> {
         try {
           const backup = await buildBackup(attachment);
           const stem = sanitizeFilename(String(attachment.attachmentFilename || label).replace(/\.pdf$/i, ""));
-          const path = joinPath(folder, `${stem}-memory-annotations.json`);
+          const path = joinPath(selection.folder, `${stem}-memory-annotations.json`);
           await (Zotero as any).File.putContentsAsync(path, JSON.stringify(backup, null, 2));
           exported += 1;
         } catch (error) {
@@ -129,10 +122,10 @@ export async function batchExportAnnotations(): Promise<void> {
     const lines = [`已导出 ${exported} 个备份文件。`];
     if (failures.length) lines.push("", `以下 ${failures.length} 项失败：`, ...failures.slice(0, MAX_LISTED_PROBLEMS));
     if (failures.length > MAX_LISTED_PROBLEMS) lines.push(`…另有 ${failures.length - MAX_LISTED_PROBLEMS} 项`);
-    alertUser("Memory", lines.join("\n"));
+    alertUser("Memory", lines.join("\n"), ownerWindow);
   } catch (error) {
     logError(error);
-    alertUser("Memory", errorMessage(error));
+    alertUser("Memory", errorMessage(error), ownerWindow);
   }
 }
 
@@ -140,40 +133,43 @@ export async function batchExportAnnotations(): Promise<void> {
  * Opens a multi-file import dialog; matches each backup to a library PDF by
  * filename or parent item title, then imports the matched set.
  */
-export async function batchImportAnnotations(onImported: () => void): Promise<void> {
+export async function batchImportAnnotations(onImported: () => void, ownerWindow?: Window): Promise<void> {
   try {
     const preferred = new Set(resolveSelectedPdfAttachments().map((item) => item.id));
     const catalog = await buildPdfCatalog();
     const previewCache = new Map<string, { backup?: AnnotationBackup; match?: { attachment: any; ambiguous: boolean }; error?: string }>();
 
-    const files = await chooseJsonFilesForImport(async (paths) => {
-      const rows: ImportMatchRow[] = [];
-      for (const path of paths) {
-        const fileName = basename(path);
-        try {
-          const raw = await (Zotero as any).File.getContentsAsync(path);
-          const backup = parseBackup(String(raw));
-          const match = matchAttachment(backup, catalog, preferred);
-          previewCache.set(path, { backup, match });
-          if (!match) {
-            rows.push({ path, fileName, status: "unmatched", message: "未找到匹配的 PDF（文件名或题名）" });
-            continue;
+    const files = await chooseJsonFilesForImport(
+      async (paths) => {
+        const rows: ImportMatchRow[] = [];
+        for (const path of paths) {
+          const fileName = basename(path);
+          try {
+            const raw = await (Zotero as any).File.getContentsAsync(path);
+            const backup = parseBackup(String(raw));
+            const match = matchAttachment(backup, catalog, preferred);
+            previewCache.set(path, { backup, match });
+            if (!match) {
+              rows.push({ path, fileName, status: "unmatched", message: "未找到匹配的 PDF（文件名或题名）" });
+              continue;
+            }
+            rows.push({
+              path,
+              fileName,
+              status: "matched",
+              targetLabel: displayName(match.attachment) + (match.ambiguous ? "（多个匹配，已选用其一）" : ""),
+            });
+          } catch (error) {
+            logError(error);
+            const message = errorMessage(error);
+            previewCache.set(path, { error: message });
+            rows.push({ path, fileName, status: "error", message });
           }
-          rows.push({
-            path,
-            fileName,
-            status: "matched",
-            targetLabel: displayName(match.attachment) + (match.ambiguous ? "（多个匹配，已选用其一）" : ""),
-          });
-        } catch (error) {
-          logError(error);
-          const message = errorMessage(error);
-          previewCache.set(path, { error: message });
-          rows.push({ path, fileName, status: "error", message });
         }
-      }
-      return rows;
-    });
+        return rows;
+      },
+      ownerWindow,
+    );
     if (files === undefined) return;
     if (!files.length) {
       alertUser("Memory", "没有可导入的匹配项。");
@@ -185,7 +181,7 @@ export async function batchImportAnnotations(onImported: () => void): Promise<vo
     const planned: Array<{ label: string; attachment: any; plan: ImportPlan }> = [];
     const fileFailures: string[] = [];
 
-    const close = showProgress(`正在准备导入 ${files.length} 个备份…`);
+    const close = showProgress(`正在准备导入 ${files.length} 个 PDF 标注`);
     try {
       for (const path of files) {
         const fileLabel = basename(path);
@@ -233,7 +229,7 @@ export async function batchImportAnnotations(onImported: () => void): Promise<vo
     if (needsConfirm && !confirmUser("Memory", batchPlanSummary(planned, unmatched, ambiguous, fileFailures))) return;
 
     let created = 0;
-    const applyClose = showProgress(`正在导入 ${planned.length} 个 PDF…`);
+    const applyClose = showProgress(`正在导入 ${planned.length} 个 PDF 标注`);
     try {
       for (const entry of planned) {
         if (entry.plan.items.length) {

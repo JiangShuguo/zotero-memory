@@ -12,16 +12,16 @@ export function chooseBackupOpenPath(): Promise<string | undefined> {
 }
 
 /** Multi-select JSON backups for batch import. */
-export function chooseBackupOpenPaths(): Promise<string[] | undefined> {
-  return pickFiles("选择 Memory 标注备份", "JSON", "*.json");
+export function chooseBackupOpenPaths(ownerWindow?: Window): Promise<string[] | undefined> {
+  return pickFiles("选择 Memory 标注备份", "JSON", "*.json", ownerWindow);
 }
 
-export function chooseBackupFolder(title: string): Promise<string | undefined> {
-  return pickFolder(title);
+export function chooseBackupFolder(title: string, ownerWindow?: Window): Promise<string | undefined> {
+  return pickFolder(title, ownerWindow);
 }
 
-export function alertUser(title: string, message: string): void {
-  const win = mainWindow();
+export function alertUser(title: string, message: string, ownerWindow?: Window): void {
+  const win = resolveWindow(ownerWindow);
   if (win?.Services?.prompt) {
     win.Services.prompt.alert(win, title, message);
     return;
@@ -34,8 +34,8 @@ export function alertUser(title: string, message: string): void {
   }
 }
 
-export function confirmUser(title: string, message: string): boolean {
-  const win = mainWindow();
+export function confirmUser(title: string, message: string, ownerWindow?: Window): boolean {
+  const win = resolveWindow(ownerWindow);
   const prompt = win?.Services?.prompt ?? (Services as any).prompt;
   try {
     return Boolean(prompt.confirm(win ?? null, title, message));
@@ -58,10 +58,15 @@ export function showProgress(message: string): () => void {
   }
 }
 
-async function pickFile(title: string, mode: "open" | "save", defaultName?: string): Promise<string | undefined> {
+async function pickFile(
+  title: string,
+  mode: "open" | "save",
+  defaultName?: string,
+  ownerWindow?: Window,
+): Promise<string | undefined> {
   const { FilePicker } = ChromeUtils.importESModule("chrome://zotero/content/modules/filePicker.mjs") as any;
   const fp = new FilePicker();
-  const win = mainWindow();
+  const win = resolveWindow(ownerWindow);
   if (!win) throw new Error("没有打开的 Zotero 窗口。");
   fp.init(win, title, mode === "save" ? fp.modeSave : fp.modeOpen);
   fp.appendFilter("JSON", "*.json");
@@ -71,10 +76,15 @@ async function pickFile(title: string, mode: "open" | "save", defaultName?: stri
   return accepted ? String(fp.file) : undefined;
 }
 
-async function pickFiles(title: string, filterName: string, filterMask: string): Promise<string[] | undefined> {
+async function pickFiles(
+  title: string,
+  filterName: string,
+  filterMask: string,
+  ownerWindow?: Window,
+): Promise<string[] | undefined> {
   const { FilePicker } = ChromeUtils.importESModule("chrome://zotero/content/modules/filePicker.mjs") as any;
   const fp = new FilePicker();
-  const win = mainWindow();
+  const win = resolveWindow(ownerWindow);
   if (!win) throw new Error("没有打开的 Zotero 窗口。");
   fp.init(win, title, fp.modeOpenMultiple);
   fp.appendFilter(filterName, filterMask);
@@ -84,16 +94,46 @@ async function pickFiles(title: string, filterName: string, filterMask: string):
   return files.length ? files : undefined;
 }
 
-async function pickFolder(title: string): Promise<string | undefined> {
+async function pickFolder(title: string, ownerWindow?: Window): Promise<string | undefined> {
   const { FilePicker } = ChromeUtils.importESModule("chrome://zotero/content/modules/filePicker.mjs") as any;
   const fp = new FilePicker();
-  const win = mainWindow();
+  const win = resolveWindow(ownerWindow);
   if (!win) throw new Error("没有打开的 Zotero 窗口。");
   fp.init(win, title, fp.modeGetFolder);
   const result = await fp.show();
   return result === fp.returnOK ? String(fp.file) : undefined;
 }
 
-function mainWindow(): any {
-  return (Zotero as any).getMainWindow?.() ?? (Zotero as any).getActiveZoteroPane?.()?.document?.defaultView;
+/**
+ * FilePicker needs a window with browsingContext. Prefer the preferences chrome
+ * window so the dialog is not parented to the library window behind Settings.
+ */
+function resolveWindow(ownerWindow?: Window): any {
+  const candidates: Array<Window | null | undefined> = [];
+  try {
+    candidates.push((Services as any).wm?.getMostRecentWindow?.("zotero:pref"));
+  } catch {
+    // ignore
+  }
+  if (ownerWindow && !ownerWindow.closed) {
+    candidates.push(ownerWindow);
+    try {
+      candidates.push((ownerWindow as any).browsingContext?.topChromeWindow);
+    } catch {
+      // ignore
+    }
+    try {
+      candidates.push(ownerWindow.top);
+    } catch {
+      // ignore
+    }
+  }
+  candidates.push(
+    (Zotero as any).getMainWindow?.(),
+    (Zotero as any).getActiveZoteroPane?.()?.document?.defaultView,
+  );
+  for (const win of candidates) {
+    if (win && !win.closed && (win as any).browsingContext) return win;
+  }
+  return candidates.find((win) => win && !win.closed) ?? null;
 }

@@ -1,6 +1,32 @@
 {
   "releases": [
     {
+      "version": "1.5.4",
+      "date": "2026-10-22",
+      "changes": [
+        {
+          "kind": "fixed",
+          "text": "Batch export/import dialogs stay over the preferences window instead of opening behind it"
+        },
+        {
+          "kind": "fixed",
+          "text": "Batch export correctly reads selected PDFs and shows the folder picker from Settings"
+        },
+        {
+          "kind": "fixed",
+          "text": "Install control is hidden unless an update is available"
+        },
+        {
+          "kind": "changed",
+          "text": "Update row is quieter: one version signal, text-style Install, clearer progress while installing"
+        },
+        {
+          "kind": "changed",
+          "text": "Progress text says PDF annotations during batch export/import; import match list is cleaner"
+        }
+      ]
+    },
+    {
       "version": "1.5.3",
       "date": "2026-10-22",
       "changes": [
