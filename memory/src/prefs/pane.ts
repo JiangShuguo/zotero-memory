@@ -117,12 +117,12 @@ export class PreferencePane {
 
     this.sync();
     this.render();
-    if (
-      this.update.kind !== "updated" &&
-      this.update.kind !== "available" &&
-      this.update.kind !== "updating" &&
-      Date.now() - this.checkedAt > RECHECK_AFTER_MS
-    ) {
+    // Always re-validate an "available" tip — a withdrawn release must not stick on the Install button.
+    if (this.update.kind === "updating" || this.update.kind === "updated") {
+      // leave alone
+    } else if (this.update.kind === "available") {
+      void this.check(true);
+    } else if (Date.now() - this.checkedAt > RECHECK_AFTER_MS) {
       void this.check(false);
     }
   }
@@ -153,7 +153,8 @@ export class PreferencePane {
 
   private check(force: boolean): Promise<void> {
     if (this.checking) return this.checking;
-    if (!force && (this.update.kind === "available" || this.update.kind === "updated" || this.update.kind === "updating")) {
+    // Do not freeze on "available": a withdrawn release would keep offering a dead Install link.
+    if (!force && (this.update.kind === "updated" || this.update.kind === "updating")) {
       return Promise.resolve();
     }
     this.setUpdate({ kind: "checking" });
@@ -180,11 +181,12 @@ export class PreferencePane {
     return this.checking;
   }
 
-  private async install(
-    latest = this.update.kind === "available" ? this.update.latest : undefined,
-    updateLink = this.update.kind === "available" ? this.update.updateLink : undefined,
-  ): Promise<void> {
-    if (!latest) return;
+  private async install(): Promise<void> {
+    // Refresh first so a deleted test release is not still offered.
+    await this.check(true);
+    if (this.update.kind !== "available") return;
+    const latest = this.update.latest;
+    const updateLink = this.update.updateLink;
     this.markReturnToPane();
     this.setUpdate({ kind: "updating", latest, progress: 0 });
     try {
