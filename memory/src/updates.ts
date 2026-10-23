@@ -4,14 +4,21 @@ declare const ChromeUtils: { importESModule(path: string): any };
 
 export const RELEASES_PAGE = `https://github.com/${REPOSITORY}/releases`;
 
-const UPDATES_URLS = [
+/** Authoritative copies on GitHub — CDN mirrors can lag and keep withdrawn versions. */
+const UPDATES_URLS_TRUSTED = [
   `https://raw.githubusercontent.com/${REPOSITORY}/main/memory/updates.json`,
+];
+
+const UPDATES_URLS_FALLBACK = [
   `https://cdn.jsdelivr.net/gh/${REPOSITORY}@main/memory/updates.json`,
   `https://fastly.jsdelivr.net/gh/${REPOSITORY}@main/memory/updates.json`,
 ];
 
-const CHANGELOG_URLS = [
+const CHANGELOG_URLS_TRUSTED = [
   `https://raw.githubusercontent.com/${REPOSITORY}/main/memory/addon/content/changelog.json`,
+];
+
+const CHANGELOG_URLS_FALLBACK = [
   `https://cdn.jsdelivr.net/gh/${REPOSITORY}@main/memory/addon/content/changelog.json`,
 ];
 
@@ -35,26 +42,36 @@ const KINDS = new Set<ChangeKind>(["added", "changed", "fixed"]);
 
 /**
  * Checks for a newer version and loads the changelog.
- * Takes the highest version from every source that answers (raw / jsDelivr / GitHub latest page).
+ * GitHub raw / releases / API win the version verdict. jsDelivr is fallback only —
+ * it can keep serving a withdrawn version for a while after a tag is deleted.
  * AddonManager is not used for the version verdict — its update cache is often stale.
  */
 export async function checkForUpdates(): Promise<UpdateCheck> {
-  const found: Array<{ version: string; link?: string }> = [];
+  const trusted: Array<{ version: string; link?: string }> = [];
+  const fallback: Array<{ version: string; link?: string }> = [];
 
-  const updateDocs = await Promise.all(UPDATES_URLS.map((url) => fetchJson(bust(url))));
-  for (const data of updateDocs) {
+  for (const data of await Promise.all(UPDATES_URLS_TRUSTED.map((url) => fetchJson(bust(url))))) {
     const entry = versionFromUpdates(data);
-    if (entry) found.push(entry);
+    if (entry) trusted.push(entry);
   }
 
   const fromReleasePage = await latestFromGitHubLatestPage();
-  if (fromReleasePage) found.push(fromReleasePage);
+  if (fromReleasePage) trusted.push(fromReleasePage);
 
   const fromApi = await latestFromGitHubApi();
-  if (fromApi) found.push(fromApi);
+  if (fromApi) trusted.push(fromApi);
+
+  for (const data of await Promise.all(UPDATES_URLS_FALLBACK.map((url) => fetchJson(bust(url))))) {
+    const entry = versionFromUpdates(data);
+    if (entry) fallback.push(entry);
+  }
 
   const remoteChangelogs: ReleaseNote[][] = [];
-  for (const data of await Promise.all(CHANGELOG_URLS.map((url) => fetchJson(bust(url))))) {
+  const changelogDocs = [
+    ...(await Promise.all(CHANGELOG_URLS_TRUSTED.map((url) => fetchJson(bust(url))))),
+    ...(await Promise.all(CHANGELOG_URLS_FALLBACK.map((url) => fetchJson(bust(url))))),
+  ];
+  for (const data of changelogDocs) {
     if (!data) continue;
     const parsed = parseChangelog(data);
     if (parsed.length) remoteChangelogs.push(parsed);
@@ -62,11 +79,18 @@ export async function checkForUpdates(): Promise<UpdateCheck> {
 
   const local = parseChangelog(await fetchJson(`chrome://${CHROME_PACKAGE}/content/changelog.json`));
   // Bundled changelog wins — remote CDN copies may still be older English text.
-  const releases = mergeReleases(local, remoteChangelogs);
+  let releases = mergeReleases(local, remoteChangelogs);
 
-  const latest = found.length
-    ? found.reduce((best, next) => (compareVersions(next.version, best.version) > 0 ? next : best))
+  // Prefer GitHub answers so a stale CDN cannot resurrect a deleted release.
+  const pool = trusted.length ? trusted : fallback;
+  const latest = pool.length
+    ? pool.reduce((best, next) => (compareVersions(next.version, best.version) > 0 ? next : best))
     : undefined;
+
+  // Drop changelog entries newer than the trusted latest (stale CDN after a withdraw).
+  if (latest && trusted.length) {
+    releases = releases.filter((entry) => compareVersions(entry.version, latest.version) <= 0);
+  }
 
   let updateLink = latest?.link;
   if (latest && !updateLink) {
@@ -76,7 +100,7 @@ export async function checkForUpdates(): Promise<UpdateCheck> {
   return {
     latest: latest?.version,
     updateLink,
-    remote: found.length > 0,
+    remote: pool.length > 0,
     releases,
   };
 }
