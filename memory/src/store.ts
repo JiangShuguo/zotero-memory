@@ -42,7 +42,7 @@ function toNote(item: any): MarginNote | undefined {
   const position = readPosition(item.annotationPosition);
   if (!position) return undefined;
   const color = typeof item.annotationColor === "string" && /^#[0-9a-f]{6}$/i.test(item.annotationColor)
-    ? item.annotationColor
+    ? item.annotationColor.toLowerCase()
     : FALLBACK_COLOR;
   return {
     itemID: Number(item.id),

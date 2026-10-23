@@ -504,9 +504,20 @@ export class Card {
     this.editorElement.dataset.placeholder =
       note.type === "note" ? "Click to add a comment" : "Click to comment on this annotation";
     this.applyLabels();
-    this.setStatus(this.status.textContent === "Read-only" ? "" : this.status.textContent ?? "");
+    // Do not re-apply transient statuses here — that used to cancel the Saved auto-clear timer
+    // whenever a notifier refresh re-ran applyNote (e.g. color casing changed after saveTx).
+    this.syncIdleStatus();
     this.renderPreview();
     this.colorMenu.refresh();
+  }
+
+  /** Updates only the idle Read-only label; leaves Saving/Saved/Unsaved alone. */
+  private syncIdleStatus(): void {
+    if (this.dirty || this.saving) return;
+    const text = this.status.textContent ?? "";
+    if (text === "Saving…" || text === "Saved" || text === "Unsaved" || text === "Cancelled") return;
+    if (text.startsWith("Could not")) return;
+    if (this.model.readOnly || text === "Read-only") this.setStatus("");
   }
 
   private applyLabels(): void {
@@ -540,16 +551,21 @@ export class Card {
   }
 
   private setStatus(text: string, options: { error?: boolean; autoClear?: boolean } = {}): void {
-    if (this.statusTimer) clearTimeout(this.statusTimer);
-    this.statusTimer = undefined;
     const value = text || (this.model.readOnly ? "Read-only" : "");
     const changed = this.status.textContent !== value;
+    // Keep an in-flight auto-clear when the same transient text is re-applied (e.g. applyNote).
+    if (changed || options.autoClear) {
+      if (this.statusTimer) clearTimeout(this.statusTimer);
+      this.statusTimer = undefined;
+    }
     this.status.textContent = value;
     this.status.classList.toggle("mem-error", Boolean(options.error));
     this.element.classList.toggle("mem-has-status", Boolean(value));
     if (options.autoClear) {
+      const clearing = value;
       this.statusTimer = setTimeout(() => {
         this.statusTimer = undefined;
+        if (this.status.textContent !== clearing) return;
         if (!this.dirty && !this.saving) this.setStatus("");
       }, STATUS_CLEAR_MS);
     }
