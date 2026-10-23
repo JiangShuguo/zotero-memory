@@ -384,7 +384,7 @@ export class PreferencePane {
       head.append(make("span", "mem-release-version", `v${release.version}`));
       const order = compareVersions(release.version, VERSION);
       if (order === 0) head.append(make("span", "mem-badge mem-badge-current", "NOW"));
-      else if (order > 0) head.append(make("span", "mem-badge mem-badge-new", "可更新"));
+      else if (order > 0) head.append(make("span", "mem-badge mem-badge-new", "NEW"));
       head.append(make("span", "mem-release-date", formatDate(release.date)));
       const changes = make("ul", "mem-release-changes");
       for (const change of release.changes) {
