@@ -331,18 +331,20 @@
   font-size: 0.8em;
 }
 
+#zotero-prefpane-memory .mem-badge-current,
+#zotero-prefpane-memory .mem-badge-new {
+  font-weight: bold;
+  letter-spacing: 0.04em;
+}
+
 #zotero-prefpane-memory .mem-badge-current {
   background: color-mix(in srgb, var(--mem-bad) 16%, transparent);
   color: var(--mem-bad);
-  font-weight: 600;
-  letter-spacing: 0.04em;
 }
 
 #zotero-prefpane-memory .mem-badge-new {
   background: color-mix(in srgb, var(--mem-warn) 15%, transparent);
   color: var(--mem-warn);
-  font-weight: 600;
-  letter-spacing: 0.04em;
 }
 
 #zotero-prefpane-memory .mem-release-changes {

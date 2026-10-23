@@ -1,16 +1,6 @@
 {
   "releases": [
     {
-      "version": "1.5.11",
-      "date": "2026-10-23",
-      "changes": [
-        {
-          "kind": "changed",
-          "text": "测试更新通道（即将撤回）"
-        }
-      ]
-    },
-    {
       "version": "1.5.10",
       "date": "2026-10-23",
       "changes": [
