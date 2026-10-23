@@ -1,4 +1,4 @@
-import { ADDON_ID, ADDON_NAME, CHROME_PACKAGE } from "../constants";
+import { ADDON_ID, ADDON_NAME, CHROME_PACKAGE, PREF_PREFIX } from "../constants";
 import { ANNOTATION_TYPES, type AnnotationType } from "../model/types";
 import { logError, type Settings } from "../settings";
 import {
@@ -12,6 +12,8 @@ import {
 import { VERSION } from "../version";
 
 const PANE_ID = "zotero-prefpane-memory";
+const PANE_PREF_ID = "memory-preferences";
+const REOPEN_PREFS_KEY = `${PREF_PREFIX}.reopenPrefs`;
 const RECHECK_AFTER_MS = 30 * 60 * 1000;
 
 const CHANGE_LABELS: Record<ChangeKind, string> = {
@@ -50,12 +52,14 @@ export class PreferencePane {
     try {
       this.paneID = await panes.register({
         pluginID: ADDON_ID,
-        id: "memory-preferences",
+        id: PANE_PREF_ID,
         label: ADDON_NAME,
         src: `chrome://${CHROME_PACKAGE}/content/preferences.xhtml`,
         image: `chrome://${CHROME_PACKAGE}/content/icons/icon.png`,
         stylesheets: [`chrome://${CHROME_PACKAGE}/content/preferences.css`],
       });
+      // Addon install reloads prefs while this pane is briefly missing, so Zotero falls back to General.
+      this.restorePrefsSelection();
     } catch (error) {
       logError(error);
     }
@@ -181,6 +185,7 @@ export class PreferencePane {
     updateLink = this.update.kind === "available" ? this.update.updateLink : undefined,
   ): Promise<void> {
     if (!latest) return;
+    this.markReturnToPane();
     this.setUpdate({ kind: "updating", latest, progress: 0 });
     try {
       if (
@@ -196,9 +201,79 @@ export class PreferencePane {
     } catch (error) {
       logError(error);
     }
+    this.clearReturnToPane();
     this.setUpdate({ kind: "available", latest, updateLink });
     const release = this.releases.find((entry) => entry.version === latest);
     (Zotero as any).launchURL?.(release?.url ?? updateLink ?? RELEASES_PAGE);
+  }
+
+  /** Remember Memory as the prefs target across the AddonManager reload. */
+  private markReturnToPane(): void {
+    try {
+      const paneID = this.paneID ?? PANE_PREF_ID;
+      (Zotero as any).Prefs.set("lastSelectedPrefPane", paneID);
+      (Zotero as any).Prefs.set(REOPEN_PREFS_KEY, this.prefsWindowOpen() ? "focus" : "remember", true);
+    } catch (error) {
+      logError(error);
+    }
+  }
+
+  private clearReturnToPane(): void {
+    try {
+      (Zotero as any).Prefs.set(REOPEN_PREFS_KEY, false, true);
+    } catch (error) {
+      logError(error);
+    }
+  }
+
+  private prefsWindowOpen(): boolean {
+    try {
+      const enumerator = (Services as any).wm?.getEnumerator?.("zotero:pref");
+      return Boolean(enumerator?.hasMoreElements?.());
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * After an update, PreferencePanes reloads the prefs window while Memory is unregistered,
+   * so Zotero falls back to General and overwrites lastSelectedPrefPane. Put the user back.
+   */
+  private restorePrefsSelection(): void {
+    const paneID = this.paneID ?? PANE_PREF_ID;
+    let mode: unknown;
+    try {
+      mode = (Zotero as any).Prefs.get(REOPEN_PREFS_KEY, true);
+    } catch {
+      return;
+    }
+    if (!mode || mode === false || mode === "false") return;
+    try {
+      (Zotero as any).Prefs.set(REOPEN_PREFS_KEY, false, true);
+      (Zotero as any).Prefs.set("lastSelectedPrefPane", paneID);
+    } catch (error) {
+      logError(error);
+    }
+    if (mode !== "focus" && mode !== true) return;
+
+    const attempt = (left: number): void => {
+      try {
+        const open = (Zotero as any).Utilities?.Internal?.openPreferences;
+        if (typeof open === "function") {
+          open.call((Zotero as any).Utilities.Internal, paneID);
+          return;
+        }
+        const enumerator = (Services as any).wm?.getEnumerator?.("zotero:pref");
+        while (enumerator?.hasMoreElements?.()) {
+          const win = enumerator.getNext();
+          void win?.Zotero_Preferences?.navigateToPane?.(paneID);
+        }
+      } catch (error) {
+        logError(error);
+      }
+      if (left > 0) setTimeout(() => attempt(left - 1), 150);
+    };
+    setTimeout(() => attempt(20), 100);
   }
 
   private setUpdate(state: UpdateState): void {
@@ -308,7 +383,7 @@ export class PreferencePane {
       const head = make("div", "mem-release-head");
       head.append(make("span", "mem-release-version", `v${release.version}`));
       const order = compareVersions(release.version, VERSION);
-      if (order === 0) head.append(make("span", "mem-badge mem-badge-current", "当前版本"));
+      if (order === 0) head.append(make("span", "mem-badge mem-badge-current", "NOW"));
       else if (order > 0) head.append(make("span", "mem-badge mem-badge-new", "可更新"));
       head.append(make("span", "mem-release-date", formatDate(release.date)));
       const changes = make("ul", "mem-release-changes");

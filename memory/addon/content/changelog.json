@@ -1,6 +1,20 @@
 {
   "releases": [
     {
+      "version": "1.5.9",
+      "date": "2026-10-23",
+      "changes": [
+        {
+          "kind": "changed",
+          "text": "更新日志将当前版本标记改为红色 NOW"
+        },
+        {
+          "kind": "fixed",
+          "text": "安装更新后设置页不再回到「常规」"
+        }
+      ]
+    },
+    {
       "version": "1.5.8",
       "date": "2026-10-23",
       "changes": [

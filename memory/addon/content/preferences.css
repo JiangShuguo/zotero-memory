@@ -332,8 +332,10 @@
 }
 
 #zotero-prefpane-memory .mem-badge-current {
-  background: color-mix(in srgb, var(--mem-good) 15%, transparent);
-  color: var(--mem-good);
+  background: color-mix(in srgb, var(--mem-bad) 16%, transparent);
+  color: var(--mem-bad);
+  font-weight: 600;
+  letter-spacing: 0.04em;
 }
 
 #zotero-prefpane-memory .mem-badge-new {
