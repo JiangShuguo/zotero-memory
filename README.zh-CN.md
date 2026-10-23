@@ -69,7 +69,7 @@
 
 ## 安装
 
-1. 从 [Releases](https://github.com/JiangShuguo/zotero-memory/releases) 下载 `memory.xpi`，或本地构建：
+1. 从 [Releases](https://github.com/JiangShuguo/zotero-memory/releases) 下载 `memory-x.y.z.xpi`，或本地构建：
 
 ```text
 cd memory
@@ -77,9 +77,9 @@ npm install
 npm run build
 ```
 
-需要 Node.js 18+ 与 Python 3.8+。输出：`memory/build/memory.xpi`。
+需要 Node.js 18+ 与 Python 3.8+。输出：`memory/build/memory-<version>.xpi`。
 
-2. Zotero → 工具 → 插件 → 齿轮 → **从文件安装插件…** → 选择 `memory.xpi`。
+2. Zotero → 工具 → 插件 → 齿轮 → **从文件安装插件…** → 选择该 XPI。
 3. 启用 **Memory**，然后重启 Zotero。
 
 升级后请重启一次 Zotero。
@@ -105,7 +105,7 @@ memory/
   src/             TypeScript 源码（打包进 XPI）
   tools/           build_xpi.py
   updates.json     Zotero 更新清单
-  build/           memory.xpi（已 gitignore）
+  build/           memory-<version>.xpi（已 gitignore）
 ```
 
 ---

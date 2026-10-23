@@ -94,7 +94,7 @@ export async function checkForUpdates(): Promise<UpdateCheck> {
 
   let updateLink = latest?.link;
   if (latest && !updateLink) {
-    updateLink = `https://github.com/${REPOSITORY}/releases/download/v${latest.version}/memory.xpi`;
+    updateLink = xpiDownloadUrl(latest.version);
   }
 
   return {
@@ -114,10 +114,9 @@ export type UpdateProgress = (fraction: number | null) => void;
 export async function installUpdate(updateLink?: string, onProgress?: UpdateProgress): Promise<boolean> {
   const { AddonManager } = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
 
-  const link =
-    updateLink ||
-    (await checkForUpdates()).updateLink ||
-    `https://github.com/${REPOSITORY}/releases/latest/download/memory.xpi`;
+  const checked = updateLink ? undefined : await checkForUpdates();
+  const link = updateLink || checked?.updateLink || (checked?.latest ? xpiDownloadUrl(checked.latest) : undefined);
+  if (!link) return false;
 
   onProgress?.(0);
   if (await installFromUrl(AddonManager, link, onProgress)) return true;
@@ -173,7 +172,7 @@ async function latestFromGitHubLatestPage(): Promise<{ version: string; link?: s
     const version = match[1];
     return {
       version,
-      link: `https://github.com/${REPOSITORY}/releases/download/v${version}/memory.xpi`,
+      link: xpiDownloadUrl(version),
     };
   } catch {
     return undefined;
@@ -185,18 +184,25 @@ async function latestFromGitHubApi(): Promise<{ version: string; link?: string }
     const data = await fetchJson(bust(`https://api.github.com/repos/${REPOSITORY}/releases/latest`));
     const tag = String(data?.tag_name ?? "").replace(/^v/i, "");
     if (!/^\d+\.\d+\.\d+$/.test(tag)) return undefined;
-    const asset = Array.isArray(data?.assets)
-      ? data.assets.find((item: any) => String(item?.name ?? "") === "memory.xpi")
-      : undefined;
+    const assets = Array.isArray(data?.assets) ? data.assets : [];
+    const asset =
+      assets.find((item: any) => String(item?.name ?? "") === xpiFileName(tag)) ??
+      assets.find((item: any) => String(item?.name ?? "") === "memory.xpi");
     return {
       version: tag,
-      link: asset?.browser_download_url
-        ? String(asset.browser_download_url)
-        : `https://github.com/${REPOSITORY}/releases/download/v${tag}/memory.xpi`,
+      link: asset?.browser_download_url ? String(asset.browser_download_url) : xpiDownloadUrl(tag),
     };
   } catch {
     return undefined;
   }
+}
+
+function xpiFileName(version: string): string {
+  return `memory-${version}.xpi`;
+}
+
+function xpiDownloadUrl(version: string): string {
+  return `https://github.com/${REPOSITORY}/releases/download/v${version}/${xpiFileName(version)}`;
 }
 
 async function installViaAddonManager(AddonManager: any, onProgress?: UpdateProgress): Promise<boolean> {

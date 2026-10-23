@@ -12,10 +12,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 ADDON = ROOT / "addon"
 BUILD = ROOT / "build"
-OUT = BUILD / "memory.xpi"
 ADDON_ID = "memory@jsg.local"
 # Override with MEMORY_VERSION=1.4.2 when rebuilding an older release XPI.
-VERSION = os.environ.get("MEMORY_VERSION", "1.5.9").strip() or "1.5.9"
+VERSION = os.environ.get("MEMORY_VERSION", "1.5.10").strip() or "1.5.10"
+OUT = BUILD / f"memory-{VERSION}.xpi"
 # Skip rewriting updates.json when packaging an older version via MEMORY_VERSION.
 WRITE_UPDATES = os.environ.get(
     "MEMORY_WRITE_UPDATES",
@@ -26,7 +26,7 @@ UPDATE_URL = (
     "https://raw.githubusercontent.com/JiangShuguo/zotero-memory/main/memory/updates.json"
 )
 UPDATE_LINK = (
-    f"https://github.com/JiangShuguo/zotero-memory/releases/download/v{VERSION}/memory.xpi"
+    f"https://github.com/JiangShuguo/zotero-memory/releases/download/v{VERSION}/memory-{VERSION}.xpi"
 )
 MIN_VERSION = "6.999"
 MAX_VERSION = "10.*"

@@ -69,7 +69,7 @@ Comments are stored in Zotero’s annotation comment field.
 
 ## Install
 
-1. Download `memory.xpi` from [Releases](https://github.com/JiangShuguo/zotero-memory/releases), or build:
+1. Download `memory-x.y.z.xpi` from [Releases](https://github.com/JiangShuguo/zotero-memory/releases), or build:
 
 ```text
 cd memory
@@ -77,9 +77,9 @@ npm install
 npm run build
 ```
 
-Requires Node.js 18+ and Python 3.8+. Output: `memory/build/memory.xpi`.
+Requires Node.js 18+ and Python 3.8+. Output: `memory/build/memory-<version>.xpi`.
 
-2. Zotero → Tools → Plugins → gear → **Install Plugin From File…** → select `memory.xpi`.
+2. Zotero → Tools → Plugins → gear → **Install Plugin From File…** → select the XPI.
 3. Enable **Memory**, then restart Zotero.
 
 After an upgrade, restart Zotero once.
@@ -105,7 +105,7 @@ memory/
   src/             TypeScript plugin source (bundled into the XPI)
   tools/           build_xpi.py
   updates.json     Zotero update manifest
-  build/           memory.xpi (gitignored)
+  build/           memory-<version>.xpi (gitignored)
 ```
 
 ---
