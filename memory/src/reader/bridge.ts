@@ -124,19 +124,37 @@ export class PdfBridge {
     return Array.isArray(ids) ? ids.map(String) : [];
   }
 
-  /** IDs the reader currently shows, or undefined when the reader state is not readable. */
-  visibleIDs(): ReadonlySet<string> | undefined {
+  /**
+   * Annotation keys the reader has explicitly hidden.
+   * - `undefined`: reader state unavailable — do not filter Memory cards
+   * - `"all"`: annotations are globally hidden in the reader
+   * - `Set`: only these keys are hidden (`_hidden`); keys missing from the reader
+   *   state (e.g. just imported) stay visible so cards are not blanked out
+   */
+  hiddenIDs(): ReadonlySet<string> | "all" | undefined {
     const state = this.internalReader?._state;
     const annotations = state?.annotations;
     if (!Array.isArray(annotations)) return undefined;
-    if (state?.showAnnotations === false) return new Set();
-    const ids = new Set<string>();
+    if (state?.showAnnotations === false) return "all";
+    const hidden = new Set<string>();
     for (const annotation of annotations) {
-      if (!annotation || annotation._hidden) continue;
+      if (!annotation?._hidden) continue;
       const id = annotation.id ?? annotation.key;
-      if (id !== undefined && id !== null) ids.add(String(id));
+      if (id !== undefined && id !== null) hidden.add(String(id));
     }
-    return ids;
+    return hidden;
+  }
+
+  /** Every annotation key currently in the reader state, or undefined if unavailable. */
+  annotationKeys(): ReadonlySet<string> | undefined {
+    const annotations = this.internalReader?._state?.annotations;
+    if (!Array.isArray(annotations)) return undefined;
+    const keys = new Set<string>();
+    for (const annotation of annotations) {
+      const id = annotation?.id ?? annotation?.key;
+      if (id !== undefined && id !== null) keys.add(String(id));
+    }
+    return keys;
   }
 
   select(key: string): void {

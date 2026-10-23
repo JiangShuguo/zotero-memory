@@ -20,7 +20,12 @@ export class ReaderSession {
   private readonly pinned = new Set<string>();
   private readonly pendingLayout = new Set<PageOverlay>();
   private notes: MarginNote[] = [];
-  private nativeVisible?: ReadonlySet<string>;
+  /** Explicitly hidden native annotations; see PdfBridge.hiddenIDs(). */
+  private nativeHidden?: ReadonlySet<string> | "all";
+  /** Keys once observed in the reader; used to drop cards the instant the reader deletes them. */
+  private readonly seenInReader = new Set<string>();
+  /** Latest key set from the reader, or undefined when the reader state is unavailable. */
+  private readerKeys?: ReadonlySet<string>;
   private root?: HTMLElement;
   private cardDocument?: Document;
   private activeKey?: string;
@@ -78,22 +83,29 @@ export class ReaderSession {
     this.bridge = new PdfBridge(reader);
   }
 
+  get alive(): boolean {
+    return !this.destroyed;
+  }
+
   start(): Promise<void> {
+    if (this.destroyed) return Promise.reject(new Error("Memory: reader session was destroyed"));
     this.startup ??= this.boot();
     return this.startup;
   }
 
   setSettings(settings: Settings): void {
     this.settings = settings;
-    if (!this.ready) return;
+    if (!this.ready || this.destroyed) return;
     this.paint();
   }
 
   refresh(): void {
     if (!this.ready || this.destroyed) return;
-    const attachmentID = Number(this.reader?.itemID);
-    if (!Number.isInteger(attachmentID)) return;
+    const attachmentID = Math.trunc(Number(this.reader?.itemID));
+    if (!Number.isFinite(attachmentID) || attachmentID <= 0) return;
     this.notes = this.store.list(attachmentID);
+    // Fresh notes should not stay trapped behind a native-popup hold.
+    this.holdForPopup.clear();
     this.paint();
   }
 
@@ -108,14 +120,15 @@ export class ReaderSession {
     setTimeout(() => this.cards.get(String(first))?.open(true), 0);
   }
 
+  /** Never throws: the reader window may already be a dead object. */
   destroy(): void {
     this.destroyed = true;
     this.ready = false;
-    this.cancelFrame?.();
-    this.cancelFrame = undefined;
     if (this.visibilityTimer) clearTimeout(this.visibilityTimer);
-    this.clearUi();
-    this.bridge.destroy();
+    attempt(() => this.cancelFrame?.());
+    this.cancelFrame = undefined;
+    attempt(() => this.clearUi());
+    attempt(() => this.bridge.destroy());
   }
 
   // -------------------------------------------------------------------------
@@ -127,7 +140,7 @@ export class ReaderSession {
       return;
     }
     this.ready = true;
-    this.nativeVisible = this.bridge.visibleIDs();
+    this.applyReaderVisibility(false);
     this.bridge.onGeometryChange((reason) => {
       if (reason === "scalechanging") this.recenterLeft = SETTLE_FRAMES;
       this.schedulePaint(false);
@@ -158,6 +171,8 @@ export class ReaderSession {
     const shown = this.notes.filter((note) => {
       if (this.cards.get(note.key)?.busy) return true;
       if (this.holdForPopup.has(note.key)) return false;
+      // Reader already dropped it (delete) but the DB notifier has not caught up yet.
+      if (this.readerKeys && this.seenInReader.has(note.key) && !this.readerKeys.has(note.key)) return false;
       return this.settings.kinds.has(note.type) && noteShouldShow(note, this.pinned);
     });
     this.syncCards(doc, shown);
@@ -227,7 +242,9 @@ export class ReaderSession {
         card.element.classList.toggle("mem-hovered", this.hoveredKey === note.key);
         this.cards.set(note.key, card);
       }
-      const hidden = this.nativeVisible !== undefined && !this.nativeVisible.has(note.key);
+      const hidden =
+        this.nativeHidden === "all" ||
+        (this.nativeHidden !== undefined && this.nativeHidden.has(note.key));
       card.element.classList.toggle("mem-filtered", hidden && !card.isEditing);
     }
   }
@@ -305,17 +322,36 @@ export class ReaderSession {
 
   private scheduleVisibility(): void {
     if (this.visibilityTimer) clearTimeout(this.visibilityTimer);
+    // Deletions should clear the card immediately; filter toggles can settle briefly.
+    const keys = this.bridge.annotationKeys();
+    const removed =
+      Boolean(keys) &&
+      [...this.seenInReader].some((key) => keys && !keys.has(key) && this.cards.has(key));
+    if (removed) {
+      this.applyReaderVisibility(true);
+      return;
+    }
     this.visibilityTimer = setTimeout(() => {
       this.visibilityTimer = undefined;
       if (!this.ready || this.destroyed) return;
-      this.nativeVisible = this.bridge.visibleIDs();
-      this.schedulePaint(true, 1);
+      this.applyReaderVisibility(true);
     }, VISIBILITY_SETTLE_MS);
   }
 
+  private applyReaderVisibility(paint: boolean): void {
+    this.nativeHidden = this.bridge.hiddenIDs();
+    const keys = this.bridge.annotationKeys();
+    this.readerKeys = keys;
+    if (keys) {
+      for (const key of keys) this.seenInReader.add(key);
+    }
+    if (paint) this.paint();
+  }
+
   /**
-   * While the native popup is open for an annotation that has no margin card yet, keep the card
-   * hidden so the user finishes writing in one place. Closing the popup lifts the hold.
+   * While the native popup is open for a brand-new empty annotation, keep the margin card
+   * hidden so the user finishes writing in one place. Annotations that already have a
+   * comment always keep their cards — holding those made imports look like a total outage.
    */
   private syncPopupHold(ids: readonly string[]): void {
     const open = new Set(ids);
@@ -329,6 +365,9 @@ export class ReaderSession {
       if (this.holdForPopup.has(id)) continue;
       const card = this.cards.get(id);
       if (card && card.element.getClientRects().length > 0) continue;
+      const note = this.notes.find((entry) => entry.key === id);
+      // Already has a comment (or is a note annotation): never hold it back.
+      if (note && (note.type === "note" || note.comment.trim())) continue;
       this.holdForPopup.add(id);
       changed = true;
     }
@@ -411,13 +450,21 @@ export class ReaderSession {
   }
 
   private clearUi(): void {
-    for (const card of this.cards.values()) card.destroy();
+    for (const card of this.cards.values()) attempt(() => card.destroy());
     this.cards.clear();
-    this.removeOverlays();
-    this.setHover(undefined);
+    for (const overlay of this.overlays.values()) attempt(() => overlay.destroy());
+    this.overlays.clear();
+    this.pendingLayout.clear();
+    attempt(() => this.root?.remove());
+    this.root = undefined;
+    attempt(() => this.setHover(undefined));
+    this.hoveredKey = undefined;
     this.popupPending = undefined;
     this.holdForPopup.clear();
-    this.bridge.setAnnotationPopupHidden(false);
+    this.seenInReader.clear();
+    this.readerKeys = undefined;
+    this.nativeHidden = undefined;
+    attempt(() => this.bridge.setAnnotationPopupHidden(false));
     const doc = this.cardDocument ?? this.bridge.document();
     try {
       this.bridge.viewerElement()?.classList.remove(VIEWER_CLASS);
@@ -427,6 +474,14 @@ export class ReaderSession {
       // The reader can close before the overlay does.
     }
     this.cardDocument = undefined;
+  }
+}
+
+function attempt(run: () => void): void {
+  try {
+    run();
+  } catch {
+    // Dead reader windows throw on any access; cleanup must still finish.
   }
 }
 

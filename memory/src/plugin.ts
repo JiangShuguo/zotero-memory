@@ -29,6 +29,8 @@ const BUTTON_ICON = `<svg viewBox="0 0 24 24" aria-hidden="true">
 export class MemoryPlugin {
   private readonly store = new NoteStore();
   private readonly sessions = new Map<object, ReaderSession>();
+  /** One in-flight create/start per reader so toolbar + toggle cannot race. */
+  private readonly sessionTasks = new Map<object, Promise<ReaderSession | undefined>>();
   private readonly pane = new PreferencePane({
     settings: () => this.settings,
     setKind: (kind, visible) => this.setKind(kind, visible),
@@ -65,8 +67,15 @@ export class MemoryPlugin {
     if (this.notifierID) Zotero.Notifier.unregisterObserver(this.notifierID);
     this.notifierID = undefined;
     for (const cleanup of this.itemMenuCleanups.splice(0)) cleanup();
-    for (const session of this.sessions.values()) session.destroy();
+    for (const session of this.sessions.values()) {
+      try {
+        session.destroy();
+      } catch (error) {
+        logError(error);
+      }
+    }
     this.sessions.clear();
+    this.sessionTasks.clear();
     this.pane.unregister();
     for (const reader of readers?._readers ?? []) removeToolbarButtons(reader?._iframeWindow?.document);
   }
@@ -104,35 +113,76 @@ export class MemoryPlugin {
 
   private readonly notifier = {
     notify: (event: string, type: string) => {
-      this.dropClosedReaders();
-      if (type !== "item" || !["add", "modify", "delete", "trash"].includes(event)) return;
-      this.refreshSessions();
+      try {
+        if (type === "item" && ["add", "modify", "delete", "trash"].includes(event)) this.refreshSessions();
+        else this.dropClosedReaders();
+      } catch (error) {
+        logError(error);
+      }
     },
   };
 
-  private async session(reader: any): Promise<ReaderSession | undefined> {
-    if (!this.running || !isPdf(reader)) return undefined;
-    let session = this.sessions.get(reader);
-    if (!session) {
-      session = new ReaderSession(reader, this.store, this.settings);
-      this.sessions.set(reader, session);
+  private session(reader: any): Promise<ReaderSession | undefined> {
+    if (!this.running || !isPdf(reader)) return Promise.resolve(undefined);
+    const current = this.sessions.get(reader);
+    if (current?.alive) {
+      return current.start().then(
+        () => current,
+        (error) => {
+          logError(error);
+          return undefined;
+        },
+      );
     }
+    const pending = this.sessionTasks.get(reader);
+    if (pending) return pending;
+
+    const task = this.openSession(reader);
+    this.sessionTasks.set(reader, task);
+    return task.finally(() => {
+      if (this.sessionTasks.get(reader) === task) this.sessionTasks.delete(reader);
+    });
+  }
+
+  private async openSession(reader: any): Promise<ReaderSession | undefined> {
+    const existing = this.sessions.get(reader);
+    if (existing?.alive) {
+      try {
+        await existing.start();
+        return existing;
+      } catch (error) {
+        logError(error);
+      }
+    }
+    if (existing) {
+      existing.destroy();
+      this.sessions.delete(reader);
+    }
+
+    const session = new ReaderSession(reader, this.store, this.settings);
+    this.sessions.set(reader, session);
     try {
       await session.start();
       return session;
     } catch (error) {
+      logError(error);
       if (this.sessions.get(reader) === session) this.sessions.delete(reader);
       session.destroy();
-      logError(error);
       return undefined;
     }
   }
 
   private refreshSessions(): void {
+    this.eachSession((session) => session.refresh());
+  }
+
+  /** Runs `fn` on every live session; one broken session must not stop the others. */
+  private eachSession(fn: (session: ReaderSession) => void): void {
     this.dropClosedReaders();
-    for (const session of this.sessions.values()) {
+    for (const session of [...this.sessions.values()]) {
+      if (!session.alive) continue;
       try {
-        session.refresh();
+        fn(session);
       } catch (error) {
         logError(error);
       }
@@ -146,11 +196,18 @@ export class MemoryPlugin {
   }
 
   private importAnnotations(): Promise<void> {
-    return importAnnotations(() => this.refreshSessions());
+    return importAnnotations(() => void this.afterImport());
   }
 
   private batchImportAnnotations(ownerWindow?: Window): Promise<void> {
-    return batchImportAnnotations(() => this.refreshSessions(), ownerWindow);
+    return batchImportAnnotations(() => void this.afterImport(), ownerWindow);
+  }
+
+  /** After import: turn Memory on and reload cards without tearing sessions down. */
+  private afterImport(): void {
+    if (!this.settings.enabled) this.setEnabled(true);
+    else this.refreshSessions();
+    void this.ensureOpenReaders();
   }
 
   private bindItemMenu(win: Window): void {
@@ -163,7 +220,11 @@ export class MemoryPlugin {
 
   private setEnabled(enabled: boolean): void {
     writeEnabled(enabled);
-    this.applySettings({ ...this.settings, enabled });
+    this.settings = { ...this.settings, enabled };
+    this.syncButtons();
+    this.pane.sync();
+    this.eachSession((session) => session.setSettings(this.settings));
+    if (enabled) void this.ensureOpenReaders();
   }
 
   private setKind(kind: AnnotationType, visible: boolean): void {
@@ -172,14 +233,25 @@ export class MemoryPlugin {
     if (visible) kinds.add(kind);
     else kinds.delete(kind);
     writeKind(kind, visible);
-    this.applySettings({ ...this.settings, kinds });
+    this.settings = { ...this.settings, kinds };
+    this.pane.sync();
+    this.eachSession((session) => session.setSettings(this.settings));
   }
 
-  private applySettings(settings: Settings): void {
-    this.settings = settings;
-    for (const session of this.sessions.values()) session.setSettings(settings);
-    this.syncButtons();
-    this.pane.sync();
+  /** Start sessions for open PDFs that do not have one yet, then refresh. */
+  private async ensureOpenReaders(): Promise<void> {
+    this.dropClosedReaders();
+    for (const reader of (Zotero as any).Reader?._readers ?? []) {
+      if (!isPdf(reader) || !isLiveReader(reader)) continue;
+      try {
+        const session = await this.session(reader);
+        if (!session?.alive) continue;
+        session.setSettings(this.settings);
+        if (this.settings.enabled) session.refresh();
+      } catch (error) {
+        logError(error);
+      }
+    }
   }
 
   private makeButton(doc: Document): HTMLButtonElement {
@@ -193,7 +265,11 @@ export class MemoryPlugin {
     button.type = "button";
     button.className = `toolbar-button ${BUTTON_CLASS}`;
     button.innerHTML = BUTTON_ICON;
-    button.addEventListener("click", () => this.setEnabled(!this.settings.enabled));
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      this.setEnabled(!this.settings.enabled);
+    });
     this.syncButton(button);
     return button;
   }
@@ -212,8 +288,12 @@ export class MemoryPlugin {
 
   private syncButtons(): void {
     for (const reader of (Zotero as any).Reader?._readers ?? []) {
-      const doc = reader?._iframeWindow?.document as Document | undefined;
-      doc?.querySelectorAll<HTMLButtonElement>(`.${BUTTON_CLASS}`).forEach((button) => this.syncButton(button));
+      try {
+        const doc = reader?._iframeWindow?.document as Document | undefined;
+        doc?.querySelectorAll<HTMLButtonElement>(`.${BUTTON_CLASS}`).forEach((button) => this.syncButton(button));
+      } catch {
+        // Closed reader tab.
+      }
     }
   }
 
@@ -225,12 +305,18 @@ export class MemoryPlugin {
     button.setAttribute("aria-label", button.title);
   }
 
+  /** Forgets sessions whose reader tab is gone. Removes from the map first so a failing destroy cannot leave it behind. */
   private dropClosedReaders(): void {
     const live = new Set<object>(((Zotero as any).Reader?._readers ?? []).filter(isLiveReader));
-    for (const [reader, session] of this.sessions) {
-      if (live.has(reader)) continue;
-      session.destroy();
+    for (const [reader, session] of [...this.sessions]) {
+      if (live.has(reader) && session.alive) continue;
       this.sessions.delete(reader);
+      this.sessionTasks.delete(reader);
+      try {
+        session.destroy();
+      } catch (error) {
+        logError(error);
+      }
     }
   }
 }

@@ -24,9 +24,11 @@ export function readPosition(value: unknown): PdfPointBox | undefined {
   }
   if (!parsed || typeof parsed !== "object") return undefined;
   const record = parsed as Partial<PdfPointBox>;
-  if (!Number.isInteger(record.pageIndex) || Number(record.pageIndex) < 0) return undefined;
+  // Zotero sometimes stores pageIndex as a string; Number.isInteger("7") is false.
+  const pageIndex = Math.trunc(Number(record.pageIndex));
+  if (!Number.isFinite(pageIndex) || pageIndex < 0) return undefined;
   return {
-    pageIndex: Number(record.pageIndex),
+    pageIndex,
     rects: copyNumberLists(record.rects),
     nextPageRects: copyNumberLists(record.nextPageRects),
     paths: copyNumberLists(record.paths),
