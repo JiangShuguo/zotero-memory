@@ -43,6 +43,7 @@ export class PreferencePane {
   private checkedAt = 0;
   private checking?: Promise<void>;
   private update: UpdateState = { kind: "idle" };
+  private prefsRestoreQueued = false;
 
   constructor(private readonly host: PaneHost) {}
 
@@ -58,7 +59,7 @@ export class PreferencePane {
         image: `chrome://${CHROME_PACKAGE}/content/icons/icon.png`,
         stylesheets: [`chrome://${CHROME_PACKAGE}/content/preferences.css`],
       });
-      // Addon install reloads prefs while this pane is briefly missing, so Zotero falls back to General.
+      // Prefs window reloads asynchronously; bind() also restores once the Memory pane is live.
       this.restorePrefsSelection();
     } catch (error) {
       logError(error);
@@ -117,6 +118,8 @@ export class PreferencePane {
 
     this.sync();
     this.render();
+    // Pane DOM is ready now — best moment to leave General after an in-place update reload.
+    this.restorePrefsSelection();
     // Always re-validate an "available" tip — a withdrawn release must not stick on the Install button.
     if (this.update.kind === "updating" || this.update.kind === "updated") {
       // leave alone
@@ -238,8 +241,9 @@ export class PreferencePane {
   }
 
   /**
-   * After an update, PreferencePanes reloads the prefs window while Memory is unregistered,
-   * so Zotero falls back to General and overwrites lastSelectedPrefPane. Put the user back.
+   * After an update, PreferencePanes reloads prefs while Memory is briefly unregistered,
+   * so Zotero falls back to General. Keep the reopen flag until navigation actually lands
+   * on Memory — clearing it too early left users stuck on 常规.
    */
   private restorePrefsSelection(): void {
     const paneID = this.paneID ?? PANE_PREF_ID;
@@ -250,32 +254,61 @@ export class PreferencePane {
       return;
     }
     if (!mode || mode === false || mode === "false") return;
+
     try {
-      (Zotero as any).Prefs.set(REOPEN_PREFS_KEY, false, true);
       (Zotero as any).Prefs.set("lastSelectedPrefPane", paneID);
     } catch (error) {
       logError(error);
     }
-    if (mode !== "focus" && mode !== true) return;
+
+    const wantFocus = mode === "focus" || mode === true;
+    if (!wantFocus) {
+      this.clearReturnToPane();
+      return;
+    }
+
+    if (this.prefsRestoreQueued) return;
+    this.prefsRestoreQueued = true;
 
     const attempt = (left: number): void => {
+      let done = false;
       try {
-        const open = (Zotero as any).Utilities?.Internal?.openPreferences;
-        if (typeof open === "function") {
-          open.call((Zotero as any).Utilities.Internal, paneID);
-          return;
-        }
+        (Zotero as any).Prefs.set("lastSelectedPrefPane", paneID);
         const enumerator = (Services as any).wm?.getEnumerator?.("zotero:pref");
         while (enumerator?.hasMoreElements?.()) {
           const win = enumerator.getNext();
-          void win?.Zotero_Preferences?.navigateToPane?.(paneID);
+          const prefs = win?.Zotero_Preferences;
+          if (!prefs) continue;
+          if (typeof prefs.navigateToPane === "function") {
+            void prefs.navigateToPane(paneID);
+          }
+          const selected = prefs.navigation?.value ?? prefs._navigation?.value;
+          if (selected === paneID) done = true;
+          else if (prefs.panes?.get?.(paneID) && prefs.navigation) {
+            prefs.navigation.value = paneID;
+            done = prefs.navigation.value === paneID;
+          }
+        }
+        if (!done) {
+          const open = (Zotero as any).Utilities?.Internal?.openPreferences;
+          if (typeof open === "function") open.call((Zotero as any).Utilities.Internal, paneID);
         }
       } catch (error) {
         logError(error);
       }
-      if (left > 0) setTimeout(() => attempt(left - 1), 150);
+      if (done) {
+        this.prefsRestoreQueued = false;
+        this.clearReturnToPane();
+        return;
+      }
+      if (left > 0) {
+        setTimeout(() => attempt(left - 1), 200);
+        return;
+      }
+      this.prefsRestoreQueued = false;
+      this.clearReturnToPane();
     };
-    setTimeout(() => attempt(20), 100);
+    setTimeout(() => attempt(40), 0);
   }
 
   private setUpdate(state: UpdateState): void {
