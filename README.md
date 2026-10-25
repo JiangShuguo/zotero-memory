@@ -6,7 +6,7 @@
 
 | | |
 | --- | --- |
-| Version | 1.3.0 |
+| Version | 1.5.11 |
 | Author | jsg |
 | Compatible with | Zotero 7.x – 10.* |
 | License | MIT |
