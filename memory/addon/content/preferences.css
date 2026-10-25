@@ -526,7 +526,7 @@
 }
 
 @media (max-width: 560px) {
-  #zotero-prefpane-memory .mem-hero-top {
+  #zotero-prefpane-memory .mem-hero-row {
     flex-wrap: wrap;
   }
 
