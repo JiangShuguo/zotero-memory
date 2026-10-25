@@ -57,7 +57,8 @@ export class PreferencePane {
         label: ADDON_NAME,
         src: `chrome://${CHROME_PACKAGE}/content/preferences.xhtml`,
         image: `chrome://${CHROME_PACKAGE}/content/icons/icon.png`,
-        stylesheets: [`chrome://${CHROME_PACKAGE}/content/preferences.css`],
+        // Unique query per startup: an in-place update otherwise keeps the previous version's cached CSS.
+        stylesheets: [`chrome://${CHROME_PACKAGE}/content/preferences.css?v=${VERSION}-${Date.now()}`],
       });
       // Prefs window reloads asynchronously; bind() also restores once the Memory pane is live.
       this.restorePrefsSelection();
