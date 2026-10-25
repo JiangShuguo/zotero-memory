@@ -349,6 +349,16 @@ export class PreferencePane {
     else if (state.kind === "error") statusText = state.message;
     status.textContent = statusText;
     status.dataset.state = state.kind;
+    const latest = root.querySelector<HTMLElement>("[data-mem-update-latest]");
+    if (latest) {
+      if (state.kind === "latest") {
+        latest.hidden = false;
+        latest.removeAttribute("hidden");
+      } else {
+        latest.hidden = true;
+        latest.setAttribute("hidden", "true");
+      }
+    }
     if (install) {
       const showInstall = state.kind === "available";
       install.textContent = showInstall ? `安装 v${state.latest}` : "安装";

@@ -20,7 +20,7 @@ for name in ("package.json", "package-lock.json"):
 build = root / "tools" / "build_xpi.py"
 text = build.read_text(encoding="utf-8")
 text2, n = re.subn(
-    r'(os\.environ\.get\("MEMORY_VERSION", ")1\.5\.\d("\)\.strip\(\) or ")1\.5\.\d(")',
+    r'(os\.environ\.get\("MEMORY_VERSION", ")\d+\.\d+\.\d+("\)\.strip\(\) or ")\d+\.\d+\.\d+(")',
     rf"\g<1>{version}\g<2>{version}\g<3>",
     text,
     count=1,
