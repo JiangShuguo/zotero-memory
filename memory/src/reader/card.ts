@@ -186,7 +186,11 @@ export class Card {
   destroy(): void {
     this.clearTimers();
     this.colorMenu.hide();
-    if (this.dirty && !this.saving) void this.persist();
+    // Do not save into a deleted/trashed annotation — that raced with undo restore and
+    // could leave a second comment card on the same highlight.
+    if (this.dirty && !this.saving && annotationStillEditable(this.model.itemID)) {
+      void this.persist();
+    }
     for (const cleanup of this.cleanups.splice(0)) cleanup();
     this.scrollbar.destroy();
     this.element.remove();
@@ -235,9 +239,28 @@ export class Card {
     });
   }
 
+  private composing = false;
+
   private bindEditor(): void {
     const editor = this.editorElement;
-    editor.addEventListener("input", () => this.onInput());
+    editor.addEventListener("compositionstart", () => {
+      this.composing = true;
+    });
+    editor.addEventListener("compositionend", () => {
+      this.composing = false;
+      this.onInput();
+    });
+    editor.addEventListener("input", () => {
+      if (this.composing) {
+        // Keep draft in sync for layout, but do not split IME input into undo steps.
+        this.draft = this.editor.value();
+        this.dirty = this.draft !== this.saved;
+        this.renderPreview();
+        this.host.resized(this);
+        return;
+      }
+      this.onInput();
+    });
     editor.addEventListener("keydown", (event) => this.onKeyDown(event));
     editor.addEventListener("keyup", () => this.syncToolbar());
     editor.addEventListener("pointerup", () => this.syncToolbar());
@@ -633,5 +656,14 @@ export class Card {
     this.clearSaveTimer();
     if (this.statusTimer) clearTimeout(this.statusTimer);
     this.statusTimer = undefined;
+  }
+}
+
+function annotationStillEditable(itemID: number): boolean {
+  try {
+    const item = (Zotero as any).Items.get(itemID);
+    return Boolean(item?.isAnnotation?.() && !item.deleted && item.isEditable?.() !== false);
+  } catch {
+    return false;
   }
 }

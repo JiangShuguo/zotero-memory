@@ -51,8 +51,12 @@ export class ReaderSession {
   private readonly holdForPopup = new Set<string>();
 
   private readonly history = new UndoHistory();
-  /** Latest sync snapshots so a reader delete can still be undone. */
+  /** Latest sync snapshots so create/delete can still be undone. */
   private readonly snapshots = new Map<string, AnnotationSnapshot>();
+  /** After the first visibility pass, key add/remove is treated as user action. */
+  private trackAnnotationMutations = false;
+  /** Keys changed by our own undo/redo — ignore echo creates/deletes from the reader/notifier. */
+  private readonly suppressPresence = new Map<string, ReturnType<typeof setTimeout>>();
   private unbindHistoryKeys?: () => void;
 
   private readonly cardHost: CardHost = {
@@ -74,6 +78,7 @@ export class ReaderSession {
         itemID: card.note.itemID,
         before,
         after,
+        at: Date.now(),
       });
     },
     recordColor: (card, before, after) => {
@@ -137,8 +142,12 @@ export class ReaderSession {
     if (!this.ready || this.destroyed) return;
     const attachmentID = this.attachmentID();
     if (!attachmentID) return;
+    const previousKeys = new Set(this.notes.map((note) => note.key));
     this.notes = this.store.list(attachmentID);
-    if (!this.history.isApplying) this.refreshSnapshots(this.notes);
+    if (!this.history.isApplying) {
+      this.refreshSnapshots(this.notes);
+      this.noteCreatedFromList(previousKeys, attachmentID);
+    }
     // Fresh notes should not stay trapped behind a native-popup hold.
     this.holdForPopup.clear();
     this.paint();
@@ -161,6 +170,8 @@ export class ReaderSession {
     this.ready = false;
     this.history.clear();
     this.snapshots.clear();
+    for (const timer of this.suppressPresence.values()) clearTimeout(timer);
+    this.suppressPresence.clear();
     attempt(() => this.unbindHistoryKeys?.());
     this.unbindHistoryKeys = undefined;
     if (this.visibilityTimer) clearTimeout(this.visibilityTimer);
@@ -203,6 +214,8 @@ export class ReaderSession {
     this.bindHistoryKeys();
     this.refresh();
     this.syncPopupHold(this.bridge.annotationPopupIDs());
+    // Initial annotations are not undoable creates; only changes after this count.
+    this.trackAnnotationMutations = true;
   }
 
   private bindHistoryKeys(): void {
@@ -248,79 +261,156 @@ export class ReaderSession {
   }
 
   private refreshSnapshots(notes: readonly MarginNote[]): void {
-    const live = new Set(notes.map((note) => note.key));
-    for (const key of [...this.snapshots.keys()]) {
-      if (!live.has(key)) this.snapshots.delete(key);
-    }
     for (const note of notes) this.rememberSnapshot(note.key, note.itemID);
   }
 
-  private noteRemovedDeletes(previousKeys: ReadonlySet<string> | undefined, nextKeys: ReadonlySet<string> | undefined): void {
-    if (this.history.isApplying || !previousKeys || !nextKeys) return;
+  /** Creates are taken from the DB note list so a full snapshot always exists. */
+  private noteCreatedFromList(previousKeys: ReadonlySet<string>, attachmentID: number): void {
+    if (!this.trackAnnotationMutations) return;
+    for (const note of this.notes) {
+      if (previousKeys.has(note.key) || this.suppressPresence.has(note.key)) continue;
+      const snapshot = this.snapshots.get(note.key);
+      if (!snapshot) continue;
+      this.history.push({
+        kind: "annotation",
+        attachmentID,
+        key: note.key,
+        before: null,
+        after: structuredCloneSafe(snapshot),
+      });
+    }
+  }
+
+  /** Deletes are taken from reader keys so we still have a cached snapshot. */
+  private noteRemovedFromReader(
+    previousKeys: ReadonlySet<string> | undefined,
+    nextKeys: ReadonlySet<string> | undefined,
+  ): void {
+    if (this.history.isApplying || !this.trackAnnotationMutations || !previousKeys || !nextKeys) return;
     const attachmentID = this.attachmentID();
     if (!attachmentID) return;
     for (const key of previousKeys) {
-      if (nextKeys.has(key)) continue;
+      if (nextKeys.has(key) || this.suppressPresence.has(key)) continue;
       const snapshot = this.snapshots.get(key);
       if (!snapshot) continue;
-      this.history.push({ kind: "delete", attachmentID, key, snapshot: structuredCloneSafe(snapshot) });
+      this.history.push({
+        kind: "annotation",
+        attachmentID,
+        key,
+        before: structuredCloneSafe(snapshot),
+        after: null,
+      });
       this.snapshots.delete(key);
     }
+  }
+
+  private mutePresence(key: string): void {
+    const previous = this.suppressPresence.get(key);
+    if (previous) clearTimeout(previous);
+    this.suppressPresence.set(
+      key,
+      setTimeout(() => this.suppressPresence.delete(key), 1000),
+    );
   }
 
   private async applyHistory(entry: UndoEntry, toward: "before" | "after"): Promise<void> {
     try {
       if (entry.kind === "comment") {
         const value = toward === "before" ? entry.before : entry.after;
-        await this.store.saveComment(entry.itemID, value);
+        const item = annotationItem(entry.itemID, entry.key, this.attachmentID());
+        if (!item) return;
+        await this.store.saveComment(Number(item.id), value);
         if (value.trim()) this.pinned.delete(entry.key);
         const card = this.cards.get(entry.key);
         if (card) card.forceComment(value, { persisted: true });
-        this.rememberSnapshot(entry.key, entry.itemID);
+        this.rememberSnapshot(entry.key, Number(item.id));
         this.refresh();
         return;
       }
       if (entry.kind === "color") {
         const value = toward === "before" ? entry.before : entry.after;
-        await this.store.saveColor(entry.itemID, value);
+        const item = annotationItem(entry.itemID, entry.key, this.attachmentID());
+        if (!item) return;
+        await this.store.saveColor(Number(item.id), value);
         const card = this.cards.get(entry.key);
         if (card) card.forceColor(value);
-        this.rememberSnapshot(entry.key, entry.itemID);
+        this.rememberSnapshot(entry.key, Number(item.id));
         this.refresh();
         return;
       }
-      // delete: toward before = restore annotation; toward after = delete again
-      if (toward === "before") await this.restoreDeleted(entry);
-      else await this.deleteRestored(entry);
+      const target = toward === "before" ? entry.before : entry.after;
+      if (target) await this.ensureAnnotation(entry.attachmentID, entry.key, target);
+      else await this.removeAnnotation(entry.attachmentID, entry.key, entry.before ?? entry.after);
     } catch (error) {
       logError(error);
     }
   }
 
-  private async restoreDeleted(entry: Extract<UndoEntry, { kind: "delete" }>): Promise<void> {
-    const attachment = (Zotero as any).Items.get(entry.attachmentID);
+  /**
+   * Brings an annotation back without duplicating. Prefer undelete / reuse the existing
+   * item when Zotero still has it (common right after a reader delete).
+   */
+  private async ensureAnnotation(attachmentID: number, key: string, snapshot: AnnotationSnapshot): Promise<void> {
+    const attachment = (Zotero as any).Items.get(attachmentID);
     if (!attachment?.isPDFAttachment?.()) throw new Error("PDF attachment is missing");
-    const payload = { ...entry.snapshot };
-    if (!payload.key) payload.key = entry.key;
+    this.mutePresence(key);
+    if (snapshot.key) this.mutePresence(String(snapshot.key));
+
+    const existing = findAnnotation(attachment, key, snapshot);
+    if (existing) {
+      if (existing.deleted) {
+        existing.deleted = false;
+      }
+      // Restore comment/color only — geometry already lives on the existing item.
+      if (typeof snapshot.comment === "string") existing.annotationComment = snapshot.comment;
+      if (typeof snapshot.color === "string") existing.annotationColor = snapshot.color;
+      await existing.saveTx();
+      this.rememberSnapshot(String(existing.key), Number(existing.id));
+      this.mutePresence(String(existing.key));
+      if (!String(snapshot.comment ?? "").trim() && String(snapshot.type ?? "") !== "note") {
+        this.pinned.add(String(existing.key));
+      }
+      this.refresh();
+      return;
+    }
+
+    const payload: AnnotationSnapshot = {
+      ...snapshot,
+      key: String(snapshot.key ?? key),
+      isExternal: false,
+    };
     const item = await (Zotero as any).Annotations.saveFromJSON(attachment, payload);
-    const key = String(item?.key ?? payload.key ?? entry.key);
+    const liveKey = String(item?.key ?? payload.key ?? key);
     const itemID = Number(item?.id ?? 0);
-    if (itemID) this.rememberSnapshot(key, itemID);
-    // Keep empty restored comments visible until the user edits again.
-    if (!String(payload.comment ?? "").trim()) this.pinned.add(key);
+    this.mutePresence(liveKey);
+    if (itemID) this.rememberSnapshot(liveKey, itemID);
+    if (!String(payload.comment ?? "").trim() && String(payload.type ?? "") !== "note") {
+      this.pinned.add(liveKey);
+    }
     this.refresh();
   }
 
-  private async deleteRestored(entry: Extract<UndoEntry, { kind: "delete" }>): Promise<void> {
-    const attachment = (Zotero as any).Items.get(entry.attachmentID);
-    const annotations: any[] = attachment?.getAnnotations?.(false) ?? [];
-    const wantKey = String(entry.snapshot.key ?? entry.key);
-    const item = annotations.find((ann) => String(ann.key) === wantKey);
-    if (!item) return;
-    this.rememberSnapshot(wantKey, Number(item.id));
+  private async removeAnnotation(
+    attachmentID: number,
+    key: string,
+    snapshot: AnnotationSnapshot | null,
+  ): Promise<void> {
+    this.mutePresence(key);
+    if (snapshot?.key) this.mutePresence(String(snapshot.key));
+    const attachment = (Zotero as any).Items.get(attachmentID);
+    const item = findAnnotation(attachment, key, snapshot);
+    if (!item) {
+      this.snapshots.delete(key);
+      this.pinned.delete(key);
+      this.refresh();
+      return;
+    }
+    const liveKey = String(item.key);
+    this.mutePresence(liveKey);
+    this.rememberSnapshot(liveKey, Number(item.id));
     await item.eraseTx?.();
-    this.snapshots.delete(wantKey);
-    this.pinned.delete(wantKey);
+    this.snapshots.delete(liveKey);
+    this.pinned.delete(liveKey);
     this.refresh();
   }
 
@@ -510,7 +600,7 @@ export class ReaderSession {
   private applyReaderVisibility(paint: boolean): void {
     this.nativeHidden = this.bridge.hiddenIDs();
     const keys = this.bridge.annotationKeys();
-    this.noteRemovedDeletes(this.readerKeys, keys);
+    this.noteRemovedFromReader(this.readerKeys, keys);
     this.readerKeys = keys;
     if (keys) {
       for (const key of keys) this.seenInReader.add(key);
@@ -684,3 +774,45 @@ function structuredCloneSafe<T>(value: T): T {
     return JSON.parse(JSON.stringify(value)) as T;
   }
 }
+
+function findAnnotation(attachment: any, key: string, snapshot: AnnotationSnapshot | null | undefined): any | undefined {
+  const wantKey = String(snapshot?.key ?? key);
+  const wantId = Number((snapshot as any)?.id ?? 0);
+  try {
+    if (wantId > 0) {
+      const byId = (Zotero as any).Items.get(wantId);
+      if (byId?.isAnnotation?.()) return byId;
+    }
+  } catch {
+    // ignore
+  }
+  const list: any[] = attachment?.getAnnotations?.(false) ?? [];
+  const live = list.find((ann) => String(ann.key) === wantKey);
+  if (live) return live;
+  try {
+    const libraryID = attachment?.libraryID;
+    if (libraryID == null) return undefined;
+    const byKey = (Zotero as any).Items.getByLibraryAndKey(libraryID, wantKey);
+    if (byKey?.isAnnotation?.()) return byKey;
+  } catch {
+    // ignore
+  }
+  return undefined;
+}
+
+function annotationItem(itemID: number, key: string, attachmentID: number | undefined): any | undefined {
+  try {
+    const byId = (Zotero as any).Items.get(itemID);
+    if (byId?.isAnnotation?.() && !byId.deleted) return byId;
+  } catch {
+    // ignore
+  }
+  if (!attachmentID) return undefined;
+  try {
+    const attachment = (Zotero as any).Items.get(attachmentID);
+    return findAnnotation(attachment, key, { key });
+  } catch {
+    return undefined;
+  }
+}
+

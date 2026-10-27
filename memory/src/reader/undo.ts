@@ -9,6 +9,8 @@ export type UndoEntry =
       itemID: number;
       before: string;
       after: string;
+      /** Last update time — used to coalesce one typing burst into a single step. */
+      at: number;
     }
   | {
       kind: "color";
@@ -18,14 +20,19 @@ export type UndoEntry =
       after: string;
     }
   | {
-      kind: "delete";
+      /** Annotation appeared (create) or disappeared (delete). */
+      kind: "annotation";
       attachmentID: number;
-      /** Original annotation key (for matching cards / redo). */
       key: string;
-      snapshot: AnnotationSnapshot;
+      /** State before the user action; null means it did not exist (create). */
+      before: AnnotationSnapshot | null;
+      /** State after the user action; null means it was removed (delete). */
+      after: AnnotationSnapshot | null;
     };
 
 const MAX_DEPTH = 100;
+/** Merge comment edits on the same card while the user is still typing. */
+const COMMENT_COALESCE_MS = 1600;
 
 export class UndoHistory {
   private readonly undoStack: UndoEntry[] = [];
@@ -49,25 +56,56 @@ export class UndoHistory {
     this.redoStack.length = 0;
   }
 
-  /** Records a change. Consecutive comment edits on the same key coalesce into one step. */
+  /** Records a change. Comment edits on the same key coalesce within a short typing window. */
   push(entry: UndoEntry): void {
     if (this.applying) return;
     if (entry.kind === "comment" || entry.kind === "color") {
       if (entry.before === entry.after) return;
     }
+    if (entry.kind === "annotation" && entry.before === null && entry.after === null) return;
+
     const last = this.undoStack[this.undoStack.length - 1];
-    if (
-      entry.kind === "comment" &&
-      last?.kind === "comment" &&
-      last.key === entry.key &&
-      last.itemID === entry.itemID &&
-      last.after === entry.before
-    ) {
-      last.after = entry.after;
-      if (last.before === last.after) this.undoStack.pop();
+    const now = Date.now();
+
+    if (entry.kind === "comment") {
+      entry.at = now;
+      if (
+        last?.kind === "comment" &&
+        last.key === entry.key &&
+        last.itemID === entry.itemID &&
+        now - last.at <= COMMENT_COALESCE_MS
+      ) {
+        // Keep the original baseline; always take the latest text (tolerates IME gaps).
+        last.after = entry.after;
+        last.at = now;
+        if (last.before === last.after) this.undoStack.pop();
+        this.redoStack.length = 0;
+        return;
+      }
+    }
+
+    // Creating then immediately deleting (or the reverse) the same key cancels out.
+    if (entry.kind === "annotation" && last?.kind === "annotation" && last.key === entry.key) {
+      const mergedBefore = last.before;
+      const mergedAfter = entry.after;
+      this.undoStack.pop();
       this.redoStack.length = 0;
+      if (snapshotKey(mergedBefore) === snapshotKey(mergedAfter) && sameSnapshot(mergedBefore, mergedAfter)) {
+        return;
+      }
+      if (mergedBefore !== null || mergedAfter !== null) {
+        this.undoStack.push({
+          kind: "annotation",
+          attachmentID: entry.attachmentID,
+          key: entry.key,
+          before: mergedBefore,
+          after: mergedAfter,
+        });
+        while (this.undoStack.length > MAX_DEPTH) this.undoStack.shift();
+      }
       return;
     }
+
     this.undoStack.push(entry);
     while (this.undoStack.length > MAX_DEPTH) this.undoStack.shift();
     this.redoStack.length = 0;
@@ -156,5 +194,21 @@ export function captureAnnotationSnapshot(item: any): AnnotationSnapshot | undef
     };
   } catch {
     return undefined;
+  }
+}
+
+function snapshotKey(snap: AnnotationSnapshot | null): string | undefined {
+  if (!snap) return undefined;
+  const key = snap.key;
+  return key == null ? undefined : String(key);
+}
+
+function sameSnapshot(a: AnnotationSnapshot | null, b: AnnotationSnapshot | null): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  try {
+    return JSON.stringify(a) === JSON.stringify(b);
+  } catch {
+    return false;
   }
 }
