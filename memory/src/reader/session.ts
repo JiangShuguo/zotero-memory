@@ -6,6 +6,12 @@ import { PdfBridge, type PdfPage } from "./bridge";
 import { Card, type CardHost } from "./card";
 import { PageOverlay, type OverlayHost } from "./page-overlay";
 import { SURFACE_CSS, SURFACE_STYLE_ID } from "./styles";
+import {
+  UndoHistory,
+  captureAnnotationSnapshot,
+  type AnnotationSnapshot,
+  type UndoEntry,
+} from "./undo";
 
 const ROOT_CLASS = "mem-overlay-root";
 const VIEWER_CLASS = "mem-viewer";
@@ -44,16 +50,44 @@ export class ReaderSession {
   /** Annotations whose native popup is open and that did not yet have a margin card. */
   private readonly holdForPopup = new Set<string>();
 
+  private readonly history = new UndoHistory();
+  /** Latest sync snapshots so a reader delete can still be undone. */
+  private readonly snapshots = new Map<string, AnnotationSnapshot>();
+  private unbindHistoryKeys?: () => void;
+
   private readonly cardHost: CardHost = {
     save: async (card, value) => {
       await this.store.saveComment(card.note.itemID, value);
       if (value.trim()) this.pinned.delete(card.key);
+      this.rememberSnapshot(card.key, card.note.itemID);
     },
     setColor: async (card, color) => {
       await this.store.saveColor(card.note.itemID, color);
       // Notifier refresh redraws the PDF highlight; also refresh lines now for the new border color.
       this.queueLayout(card);
+      this.rememberSnapshot(card.key, card.note.itemID);
     },
+    recordComment: (card, before, after) => {
+      this.history.push({
+        kind: "comment",
+        key: card.key,
+        itemID: card.note.itemID,
+        before,
+        after,
+      });
+    },
+    recordColor: (card, before, after) => {
+      this.history.push({
+        kind: "color",
+        key: card.key,
+        itemID: card.note.itemID,
+        before,
+        after,
+      });
+    },
+    undo: () => this.undo(),
+    redo: () => this.redo(),
+    discardCommentDrafts: (card, persisted) => this.history.discardCommentDrafts(card.key, persisted),
     copyText: (text) => copyToClipboard(text),
     activate: (card) => {
       this.setActive(card.key);
@@ -101,9 +135,10 @@ export class ReaderSession {
 
   refresh(): void {
     if (!this.ready || this.destroyed) return;
-    const attachmentID = Math.trunc(Number(this.reader?.itemID));
-    if (!Number.isFinite(attachmentID) || attachmentID <= 0) return;
+    const attachmentID = this.attachmentID();
+    if (!attachmentID) return;
     this.notes = this.store.list(attachmentID);
+    if (!this.history.isApplying) this.refreshSnapshots(this.notes);
     // Fresh notes should not stay trapped behind a native-popup hold.
     this.holdForPopup.clear();
     this.paint();
@@ -124,11 +159,25 @@ export class ReaderSession {
   destroy(): void {
     this.destroyed = true;
     this.ready = false;
+    this.history.clear();
+    this.snapshots.clear();
+    attempt(() => this.unbindHistoryKeys?.());
+    this.unbindHistoryKeys = undefined;
     if (this.visibilityTimer) clearTimeout(this.visibilityTimer);
     attempt(() => this.cancelFrame?.());
     this.cancelFrame = undefined;
     attempt(() => this.clearUi());
     attempt(() => this.bridge.destroy());
+  }
+
+  async undo(): Promise<void> {
+    if (this.destroyed || !this.history.canUndo) return;
+    await this.history.undo((entry, toward) => this.applyHistory(entry, toward));
+  }
+
+  async redo(): Promise<void> {
+    if (this.destroyed || !this.history.canRedo) return;
+    await this.history.redo((entry, toward) => this.applyHistory(entry, toward));
   }
 
   // -------------------------------------------------------------------------
@@ -151,8 +200,128 @@ export class ReaderSession {
       this.syncPopup(ids);
     });
     this.bridge.onAnnotationPopup((ids) => this.syncPopupHold(ids));
+    this.bindHistoryKeys();
     this.refresh();
     this.syncPopupHold(this.bridge.annotationPopupIDs());
+  }
+
+  private bindHistoryKeys(): void {
+    const doc = this.bridge.document();
+    if (!doc) return;
+    attempt(() => this.unbindHistoryKeys?.());
+    const onKey = (event: KeyboardEvent) => {
+      if (this.destroyed) return;
+      const mod = (event.ctrlKey || event.metaKey) && !event.altKey;
+      if (!mod) return;
+      const key = event.key.toLowerCase();
+      if (key === "z" && !event.shiftKey) {
+        if (!this.history.canUndo) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void this.undo();
+        return;
+      }
+      if (key === "y" || (key === "z" && event.shiftKey)) {
+        if (!this.history.canRedo) return;
+        event.preventDefault();
+        event.stopPropagation();
+        void this.redo();
+      }
+    };
+    doc.addEventListener("keydown", onKey, true);
+    this.unbindHistoryKeys = () => doc.removeEventListener("keydown", onKey, true);
+  }
+
+  private attachmentID(): number | undefined {
+    const id = Math.trunc(Number(this.reader?.itemID));
+    return Number.isFinite(id) && id > 0 ? id : undefined;
+  }
+
+  private rememberSnapshot(key: string, itemID: number): void {
+    try {
+      const item = (Zotero as any).Items.get(itemID);
+      const snap = captureAnnotationSnapshot(item);
+      if (snap) this.snapshots.set(key, snap);
+    } catch {
+      // Item may already be gone.
+    }
+  }
+
+  private refreshSnapshots(notes: readonly MarginNote[]): void {
+    const live = new Set(notes.map((note) => note.key));
+    for (const key of [...this.snapshots.keys()]) {
+      if (!live.has(key)) this.snapshots.delete(key);
+    }
+    for (const note of notes) this.rememberSnapshot(note.key, note.itemID);
+  }
+
+  private noteRemovedDeletes(previousKeys: ReadonlySet<string> | undefined, nextKeys: ReadonlySet<string> | undefined): void {
+    if (this.history.isApplying || !previousKeys || !nextKeys) return;
+    const attachmentID = this.attachmentID();
+    if (!attachmentID) return;
+    for (const key of previousKeys) {
+      if (nextKeys.has(key)) continue;
+      const snapshot = this.snapshots.get(key);
+      if (!snapshot) continue;
+      this.history.push({ kind: "delete", attachmentID, key, snapshot: structuredCloneSafe(snapshot) });
+      this.snapshots.delete(key);
+    }
+  }
+
+  private async applyHistory(entry: UndoEntry, toward: "before" | "after"): Promise<void> {
+    try {
+      if (entry.kind === "comment") {
+        const value = toward === "before" ? entry.before : entry.after;
+        await this.store.saveComment(entry.itemID, value);
+        if (value.trim()) this.pinned.delete(entry.key);
+        const card = this.cards.get(entry.key);
+        if (card) card.forceComment(value, { persisted: true });
+        this.rememberSnapshot(entry.key, entry.itemID);
+        this.refresh();
+        return;
+      }
+      if (entry.kind === "color") {
+        const value = toward === "before" ? entry.before : entry.after;
+        await this.store.saveColor(entry.itemID, value);
+        const card = this.cards.get(entry.key);
+        if (card) card.forceColor(value);
+        this.rememberSnapshot(entry.key, entry.itemID);
+        this.refresh();
+        return;
+      }
+      // delete: toward before = restore annotation; toward after = delete again
+      if (toward === "before") await this.restoreDeleted(entry);
+      else await this.deleteRestored(entry);
+    } catch (error) {
+      logError(error);
+    }
+  }
+
+  private async restoreDeleted(entry: Extract<UndoEntry, { kind: "delete" }>): Promise<void> {
+    const attachment = (Zotero as any).Items.get(entry.attachmentID);
+    if (!attachment?.isPDFAttachment?.()) throw new Error("PDF attachment is missing");
+    const payload = { ...entry.snapshot };
+    if (!payload.key) payload.key = entry.key;
+    const item = await (Zotero as any).Annotations.saveFromJSON(attachment, payload);
+    const key = String(item?.key ?? payload.key ?? entry.key);
+    const itemID = Number(item?.id ?? 0);
+    if (itemID) this.rememberSnapshot(key, itemID);
+    // Keep empty restored comments visible until the user edits again.
+    if (!String(payload.comment ?? "").trim()) this.pinned.add(key);
+    this.refresh();
+  }
+
+  private async deleteRestored(entry: Extract<UndoEntry, { kind: "delete" }>): Promise<void> {
+    const attachment = (Zotero as any).Items.get(entry.attachmentID);
+    const annotations: any[] = attachment?.getAnnotations?.(false) ?? [];
+    const wantKey = String(entry.snapshot.key ?? entry.key);
+    const item = annotations.find((ann) => String(ann.key) === wantKey);
+    if (!item) return;
+    this.rememberSnapshot(wantKey, Number(item.id));
+    await item.eraseTx?.();
+    this.snapshots.delete(wantKey);
+    this.pinned.delete(wantKey);
+    this.refresh();
   }
 
   private paint(): void {
@@ -341,6 +510,7 @@ export class ReaderSession {
   private applyReaderVisibility(paint: boolean): void {
     this.nativeHidden = this.bridge.hiddenIDs();
     const keys = this.bridge.annotationKeys();
+    this.noteRemovedDeletes(this.readerKeys, keys);
     this.readerKeys = keys;
     if (keys) {
       for (const key of keys) this.seenInReader.add(key);
@@ -505,4 +675,12 @@ function copyToClipboard(text: string): void {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
+}
+
+function structuredCloneSafe<T>(value: T): T {
+  try {
+    return structuredClone(value);
+  } catch {
+    return JSON.parse(JSON.stringify(value)) as T;
+  }
 }

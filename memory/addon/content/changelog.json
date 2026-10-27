@@ -1,6 +1,16 @@
 {
   "releases": [
     {
+      "version": "1.5.12",
+      "date": "2026-10-27",
+      "changes": [
+        {
+          "kind": "added",
+          "text": "支持用 Ctrl+Z / Ctrl+Y 撤销与重做评论、样式、颜色，以及清空评论或删除批注"
+        }
+      ]
+    },
+    {
       "version": "1.5.11",
       "date": "2026-10-25",
       "changes": [

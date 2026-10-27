@@ -13,6 +13,15 @@ const MORE_ICON =
 export interface CardHost {
   save(card: Card, value: string): Promise<void>;
   setColor(card: Card, color: string): Promise<void>;
+  /** Records a comment edit for session undo (coalesced by the history). */
+  recordComment(card: Card, before: string, after: string): void;
+  /** Records an annotation color change for session undo. */
+  recordColor(card: Card, before: string, after: string): void;
+  /** Session undo / redo (Ctrl+Z / Ctrl+Y). */
+  undo(): Promise<void>;
+  redo(): Promise<void>;
+  /** Esc cancel: drop unpersisted comment steps for this card. */
+  discardCommentDrafts(card: Card, persisted: string): void;
   copyText(text: string): void;
   activate(card: Card): void;
   /** Marks the card as current without selecting the annotation in the reader. */
@@ -317,17 +326,44 @@ export class Card {
 
   private async changeColor(color: string): Promise<void> {
     const previous = this.model.color;
+    if (previous === color) return;
     this.model = { ...this.model, color };
     this.applyNote();
     this.host.resized(this);
     try {
       await this.host.setColor(this, color);
+      this.host.recordColor(this, previous, color);
     } catch (error) {
       this.model = { ...this.model, color: previous };
       this.applyNote();
       this.host.resized(this);
       this.setStatus(error instanceof Error ? error.message : "Could not change the color", { error: true });
     }
+  }
+
+  /** Applies a comment from undo/redo or an external restore. */
+  forceComment(value: string, options: { persisted?: boolean } = {}): void {
+    this.clearSaveTimer();
+    this.draft = value;
+    if (options.persisted !== false) {
+      this.saved = value;
+      this.dirty = false;
+      this.model = { ...this.model, comment: value };
+    } else {
+      this.dirty = value !== this.saved;
+    }
+    this.editor.load(this.draft);
+    this.renderPreview();
+    this.syncToolbar();
+    this.setStatus(this.dirty ? "Unsaved" : "");
+    this.host.resized(this);
+  }
+
+  /** Applies a color from undo/redo without recording history. */
+  forceColor(color: string): void {
+    this.model = { ...this.model, color };
+    this.applyNote();
+    this.host.resized(this);
   }
 
   // -------------------------------------------------------------------------
@@ -351,7 +387,10 @@ export class Card {
 
   private onInput(): void {
     if (this.model.readOnly) return;
-    this.draft = this.editor.value();
+    const before = this.draft;
+    const after = this.editor.value();
+    if (before !== after) this.host.recordComment(this, before, after);
+    this.draft = after;
     this.dirty = this.draft !== this.saved;
     this.setStatus(this.dirty ? "Unsaved" : "");
     this.renderPreview();
@@ -374,8 +413,20 @@ export class Card {
       void this.persist().then(() => this.editorElement.blur());
       return;
     }
-    if (!mod || event.shiftKey) return;
+    if (!mod) return;
     const key = event.key.toLowerCase();
+    if (key === "z") {
+      event.preventDefault();
+      if (event.shiftKey) void this.host.redo();
+      else void this.host.undo();
+      return;
+    }
+    if (key === "y" && !event.shiftKey) {
+      event.preventDefault();
+      void this.host.redo();
+      return;
+    }
+    if (event.shiftKey) return;
     if (key === "b" || key === "i" || key === "u") {
       event.preventDefault();
       this.run({ kind: "mark", mark: key });
@@ -451,6 +502,7 @@ export class Card {
 
   private cancel(): void {
     this.clearSaveTimer();
+    this.host.discardCommentDrafts(this, this.saved);
     this.draft = this.saved;
     this.dirty = false;
     this.editor.load(this.saved);
