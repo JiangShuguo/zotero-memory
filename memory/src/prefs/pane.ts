@@ -186,8 +186,8 @@ export class PreferencePane {
   }
 
   private async install(): Promise<void> {
-    // Refresh first so a deleted test release is not still offered.
-    await this.check(true);
+    // Install with the link already shown — do not flip back to "检查中…" first.
+    // Withdrawn builds are caught when the pane opens (re-check on bind) or if download fails.
     if (this.update.kind !== "available") return;
     const latest = this.update.latest;
     const updateLink = this.update.updateLink;
@@ -208,7 +208,9 @@ export class PreferencePane {
       logError(error);
     }
     this.clearReturnToPane();
-    this.setUpdate({ kind: "available", latest, updateLink });
+    // Download failed (e.g. withdrawn XPI): refresh the tip; only open the browser if nothing is left to install.
+    await this.check(true);
+    if (this.update.kind === "available") return;
     const release = this.releases.find((entry) => entry.version === latest);
     (Zotero as any).launchURL?.(release?.url ?? updateLink ?? RELEASES_PAGE);
   }
