@@ -11,17 +11,11 @@ const MORE_ICON =
   '<svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="3" cy="7" r="1.15"/><circle cx="7" cy="7" r="1.15"/><circle cx="11" cy="7" r="1.15"/></svg>';
 
 export interface CardHost {
-  save(card: Card, value: string): Promise<void>;
+  /** Saves the comment; `group` identifies the edit that produced it (one undo step per group). */
+  save(card: Card, value: string, group: number): Promise<void>;
   setColor(card: Card, color: string): Promise<void>;
-  /** Records a comment edit for session undo (coalesced by the history). */
-  recordComment(card: Card, before: string, after: string): void;
-  /** Records an annotation color change for session undo. */
-  recordColor(card: Card, before: string, after: string): void;
-  /** Session undo / redo (Ctrl+Z / Ctrl+Y). */
   undo(): Promise<void>;
   redo(): Promise<void>;
-  /** Esc cancel: drop unpersisted comment steps for this card. */
-  discardCommentDrafts(card: Card, persisted: string): void;
   copyText(text: string): void;
   activate(card: Card): void;
   /** Marks the card as current without selecting the annotation in the reader. */
@@ -78,6 +72,9 @@ export class Card {
   private dirty = false;
   private saving = false;
   private editing = false;
+  /** Current edit group: typing in one editing session is one undo step; formatting is its own. */
+  private group = nextGroup();
+  private saveChain: Promise<void> = Promise.resolve();
   private saveTimer?: ReturnType<typeof setTimeout>;
   private statusTimer?: ReturnType<typeof setTimeout>;
   private readonly cleanups: Array<() => void> = [];
@@ -152,6 +149,32 @@ export class Card {
     return this.editing || this.dirty || this.saving;
   }
 
+  get hasPendingSave(): boolean {
+    return this.dirty || this.saving;
+  }
+
+  /** Saves any pending text now and waits for it. */
+  flush(): Promise<void> {
+    return this.persist();
+  }
+
+  /** Shows a comment written by undo/redo; later typing starts a new step. */
+  forceComment(value: string): void {
+    this.group = nextGroup();
+    if (value === this.saved && value === this.draft && !this.dirty) return;
+    this.clearSaveTimer();
+    this.saved = value;
+    this.draft = value;
+    this.dirty = false;
+    this.model = { ...this.model, comment: value };
+    this.editor.load(value);
+    if (this.editing) this.editor.caretToEnd();
+    this.renderPreview();
+    this.syncToolbar();
+    this.setStatus("");
+    this.host.resized(this);
+  }
+
   update(note: MarginNote): void {
     const previous = this.model;
     this.model = note;
@@ -172,6 +195,7 @@ export class Card {
   open(selectAll = false): void {
     if (this.model.readOnly) return;
     if (!this.editing) {
+      this.group = nextGroup();
       this.editing = true;
       this.element.classList.add("mem-editing");
       this.scrollbar.attach(this.editorElement);
@@ -188,7 +212,7 @@ export class Card {
     this.colorMenu.hide();
     // Do not save into a deleted/trashed annotation — that raced with undo restore and
     // could leave a second comment card on the same highlight.
-    if (this.dirty && !this.saving && annotationStillEditable(this.model.itemID)) {
+    if (this.dirty && annotationStillEditable(this.model.itemID)) {
       void this.persist();
     }
     for (const cleanup of this.cleanups.splice(0)) cleanup();
@@ -239,28 +263,9 @@ export class Card {
     });
   }
 
-  private composing = false;
-
   private bindEditor(): void {
     const editor = this.editorElement;
-    editor.addEventListener("compositionstart", () => {
-      this.composing = true;
-    });
-    editor.addEventListener("compositionend", () => {
-      this.composing = false;
-      this.onInput();
-    });
-    editor.addEventListener("input", () => {
-      if (this.composing) {
-        // Keep draft in sync for layout, but do not split IME input into undo steps.
-        this.draft = this.editor.value();
-        this.dirty = this.draft !== this.saved;
-        this.renderPreview();
-        this.host.resized(this);
-        return;
-      }
-      this.onInput();
-    });
+    editor.addEventListener("input", () => this.onInput());
     editor.addEventListener("keydown", (event) => this.onKeyDown(event));
     editor.addEventListener("keyup", () => this.syncToolbar());
     editor.addEventListener("pointerup", () => this.syncToolbar());
@@ -355,7 +360,6 @@ export class Card {
     this.host.resized(this);
     try {
       await this.host.setColor(this, color);
-      this.host.recordColor(this, previous, color);
     } catch (error) {
       this.model = { ...this.model, color: previous };
       this.applyNote();
@@ -364,41 +368,21 @@ export class Card {
     }
   }
 
-  /** Applies a comment from undo/redo or an external restore. */
-  forceComment(value: string, options: { persisted?: boolean } = {}): void {
-    this.clearSaveTimer();
-    this.draft = value;
-    if (options.persisted !== false) {
-      this.saved = value;
-      this.dirty = false;
-      this.model = { ...this.model, comment: value };
-    } else {
-      this.dirty = value !== this.saved;
-    }
-    this.editor.load(this.draft);
-    this.renderPreview();
-    this.syncToolbar();
-    this.setStatus(this.dirty ? "Unsaved" : "");
-    this.host.resized(this);
-  }
-
-  /** Applies a color from undo/redo without recording history. */
-  forceColor(color: string): void {
-    this.model = { ...this.model, color };
-    this.applyNote();
-    this.host.resized(this);
-  }
-
   // -------------------------------------------------------------------------
   // Editing
 
+  /** A formatting change is its own undo step: text typed before and after it is kept apart. */
   private run(command: FormatCommand): void {
     if (!this.editing || this.model.readOnly) return;
     if (this.doc.activeElement !== this.editorElement) {
       this.editorElement.focus({ preventScroll: true });
     }
+    if (this.dirty) void this.persist();
+    this.group = nextGroup();
     this.editor.apply(command);
     this.onInput();
+    void this.persist();
+    this.group = nextGroup();
   }
 
   /** Brings the focus back to the editor and restores the last selection inside it. */
@@ -410,10 +394,7 @@ export class Card {
 
   private onInput(): void {
     if (this.model.readOnly) return;
-    const before = this.draft;
-    const after = this.editor.value();
-    if (before !== after) this.host.recordComment(this, before, after);
-    this.draft = after;
+    this.draft = this.editor.value();
     this.dirty = this.draft !== this.saved;
     this.setStatus(this.dirty ? "Unsaved" : "");
     this.renderPreview();
@@ -525,7 +506,6 @@ export class Card {
 
   private cancel(): void {
     this.clearSaveTimer();
-    this.host.discardCommentDrafts(this, this.saved);
     this.draft = this.saved;
     this.dirty = false;
     this.editor.load(this.saved);
@@ -543,17 +523,28 @@ export class Card {
     }, SAVE_DELAY_MS);
   }
 
-  private async persist(): Promise<void> {
+  /**
+   * Saves the draft as it is right now, under the current edit group. Saves run one after
+   * another, so text typed before a formatting change is stored (and undone) separately.
+   */
+  private persist(): Promise<void> {
     this.clearSaveTimer();
-    if (!this.dirty || this.saving || this.model.readOnly) return;
     const value = this.draft;
+    const group = this.group;
+    const run = this.saveChain.then(() => this.persistNow(value, group));
+    this.saveChain = run.catch(() => undefined);
+    return run;
+  }
+
+  private async persistNow(value: string, group: number): Promise<void> {
+    if (this.model.readOnly || value === this.saved) return;
     this.saving = true;
     this.setStatus("Saving…");
     try {
-      await this.host.save(this, value);
+      await this.host.save(this, value, group);
       this.saved = value;
       this.model = { ...this.model, comment: value };
-      this.dirty = this.draft !== value;
+      this.dirty = this.draft !== this.saved;
       if (this.dirty) this.setStatus("Unsaved");
       else this.setStatus("Saved", { autoClear: true });
     } catch (error) {
@@ -561,7 +552,6 @@ export class Card {
       this.setStatus(error instanceof Error ? error.message : "Could not save the comment", { error: true });
     } finally {
       this.saving = false;
-      if (this.dirty && this.draft !== value) this.queueSave();
     }
   }
 
@@ -657,6 +647,13 @@ export class Card {
     if (this.statusTimer) clearTimeout(this.statusTimer);
     this.statusTimer = undefined;
   }
+}
+
+let lastGroup = 0;
+
+function nextGroup(): number {
+  lastGroup += 1;
+  return lastGroup;
 }
 
 function annotationStillEditable(itemID: number): boolean {

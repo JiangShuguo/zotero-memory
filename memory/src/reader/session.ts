@@ -8,8 +8,12 @@ import { PageOverlay, type OverlayHost } from "./page-overlay";
 import { SURFACE_CSS, SURFACE_STYLE_ID } from "./styles";
 import {
   UndoHistory,
-  captureAnnotationSnapshot,
-  type AnnotationSnapshot,
+  onlyCommentChanged,
+  readStates,
+  sameState,
+  toAnnotationJson,
+  type AnnotationChange,
+  type AnnotationState,
   type UndoEntry,
 } from "./undo";
 
@@ -51,48 +55,32 @@ export class ReaderSession {
   private readonly holdForPopup = new Set<string>();
 
   private readonly history = new UndoHistory();
-  /** Latest sync snapshots so create/delete can still be undone. */
-  private readonly snapshots = new Map<string, AnnotationSnapshot>();
-  /** After the first visibility pass, key add/remove is treated as user action. */
-  private trackAnnotationMutations = false;
-  /** Keys changed by our own undo/redo — ignore echo creates/deletes from the reader/notifier. */
-  private readonly suppressPresence = new Map<string, ReturnType<typeof setTimeout>>();
-  private unbindHistoryKeys?: () => void;
+  /** Last known Zotero state of this attachment's annotations; changes against it become steps. */
+  private known?: Map<string, AnnotationState>;
+  /** The card edit session a comment save belongs to, while that save is in flight. */
+  private savingGroup?: { key: string; group: number };
+  private historyTask: Promise<void> = Promise.resolve();
+  private readonly keyCleanups: Array<() => void> = [];
 
   private readonly cardHost: CardHost = {
-    save: async (card, value) => {
-      await this.store.saveComment(card.note.itemID, value);
-      if (value.trim()) this.pinned.delete(card.key);
-      this.rememberSnapshot(card.key, card.note.itemID);
+    save: async (card, value, group) => {
+      this.savingGroup = { key: card.key, group };
+      try {
+        await this.store.saveComment(card.note.itemID, value);
+        if (value.trim()) this.pinned.delete(card.key);
+        this.recordChanges();
+      } finally {
+        this.savingGroup = undefined;
+      }
     },
     setColor: async (card, color) => {
       await this.store.saveColor(card.note.itemID, color);
+      this.recordChanges();
       // Notifier refresh redraws the PDF highlight; also refresh lines now for the new border color.
       this.queueLayout(card);
-      this.rememberSnapshot(card.key, card.note.itemID);
-    },
-    recordComment: (card, before, after) => {
-      this.history.push({
-        kind: "comment",
-        key: card.key,
-        itemID: card.note.itemID,
-        before,
-        after,
-        at: Date.now(),
-      });
-    },
-    recordColor: (card, before, after) => {
-      this.history.push({
-        kind: "color",
-        key: card.key,
-        itemID: card.note.itemID,
-        before,
-        after,
-      });
     },
     undo: () => this.undo(),
     redo: () => this.redo(),
-    discardCommentDrafts: (card, persisted) => this.history.discardCommentDrafts(card.key, persisted),
     copyText: (text) => copyToClipboard(text),
     activate: (card) => {
       this.setActive(card.key);
@@ -142,12 +130,8 @@ export class ReaderSession {
     if (!this.ready || this.destroyed) return;
     const attachmentID = this.attachmentID();
     if (!attachmentID) return;
-    const previousKeys = new Set(this.notes.map((note) => note.key));
     this.notes = this.store.list(attachmentID);
-    if (!this.history.isApplying) {
-      this.refreshSnapshots(this.notes);
-      this.noteCreatedFromList(previousKeys, attachmentID);
-    }
+    this.recordChanges();
     // Fresh notes should not stay trapped behind a native-popup hold.
     this.holdForPopup.clear();
     this.paint();
@@ -169,11 +153,8 @@ export class ReaderSession {
     this.destroyed = true;
     this.ready = false;
     this.history.clear();
-    this.snapshots.clear();
-    for (const timer of this.suppressPresence.values()) clearTimeout(timer);
-    this.suppressPresence.clear();
-    attempt(() => this.unbindHistoryKeys?.());
-    this.unbindHistoryKeys = undefined;
+    this.known = undefined;
+    for (const cleanup of this.keyCleanups.splice(0)) attempt(cleanup);
     if (this.visibilityTimer) clearTimeout(this.visibilityTimer);
     attempt(() => this.cancelFrame?.());
     this.cancelFrame = undefined;
@@ -181,14 +162,19 @@ export class ReaderSession {
     attempt(() => this.bridge.destroy());
   }
 
-  async undo(): Promise<void> {
-    if (this.destroyed || !this.history.canUndo) return;
-    await this.history.undo((entry, toward) => this.applyHistory(entry, toward));
+  /** Undoes the latest step. Unsaved card text is saved first so it becomes that step. */
+  undo(): Promise<void> {
+    return this.queueHistory(async () => {
+      await this.flushCards();
+      await this.history.undo((entry, direction) => this.applyStates(entry, direction));
+    });
   }
 
-  async redo(): Promise<void> {
-    if (this.destroyed || !this.history.canRedo) return;
-    await this.history.redo((entry, toward) => this.applyHistory(entry, toward));
+  redo(): Promise<void> {
+    return this.queueHistory(async () => {
+      await this.flushCards();
+      await this.history.redo((entry, direction) => this.applyStates(entry, direction));
+    });
   }
 
   // -------------------------------------------------------------------------
@@ -212,37 +198,69 @@ export class ReaderSession {
     });
     this.bridge.onAnnotationPopup((ids) => this.syncPopupHold(ids));
     this.bindHistoryKeys();
+    // The first read only sets the baseline; existing annotations are not undoable creates.
     this.refresh();
     this.syncPopupHold(this.bridge.annotationPopupIDs());
-    // Initial annotations are not undoable creates; only changes after this count.
-    this.trackAnnotationMutations = true;
   }
 
+  /**
+   * Ctrl+Z / Ctrl+Y anywhere in this reader tab: the PDF view, the reader sidebar, and the main
+   * window while this tab is selected. Other text fields keep their native text undo.
+   */
   private bindHistoryKeys(): void {
-    const doc = this.bridge.document();
-    if (!doc) return;
-    attempt(() => this.unbindHistoryKeys?.());
-    const onKey = (event: KeyboardEvent) => {
-      if (this.destroyed) return;
-      const mod = (event.ctrlKey || event.metaKey) && !event.altKey;
-      if (!mod) return;
-      const key = event.key.toLowerCase();
-      if (key === "z" && !event.shiftKey) {
-        if (!this.history.canUndo) return;
-        event.preventDefault();
-        event.stopPropagation();
-        void this.undo();
-        return;
-      }
-      if (key === "y" || (key === "z" && event.shiftKey)) {
-        if (!this.history.canRedo) return;
-        event.preventDefault();
-        event.stopPropagation();
-        void this.redo();
-      }
-    };
-    doc.addEventListener("keydown", onKey, true);
-    this.unbindHistoryKeys = () => doc.removeEventListener("keydown", onKey, true);
+    for (const cleanup of this.keyCleanups.splice(0)) attempt(cleanup);
+    const windows = new Set<any>();
+    attempt(() => windows.add(this.bridge.document()?.defaultView));
+    attempt(() => windows.add(this.reader?._iframeWindow));
+    attempt(() => windows.add(this.reader?._window));
+    for (const win of windows) {
+      if (!win || typeof win.addEventListener !== "function") continue;
+      const onKey = (event: KeyboardEvent) => this.onHistoryKey(event, win);
+      win.addEventListener("keydown", onKey, true);
+      this.keyCleanups.push(() => win.removeEventListener("keydown", onKey, true));
+    }
+  }
+
+  private onHistoryKey(event: KeyboardEvent, win: any): void {
+    if (this.destroyed || event.defaultPrevented) return;
+    if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
+    const key = event.key.toLowerCase();
+    const redo = key === "y" || (key === "z" && event.shiftKey);
+    if (key !== "z" && !redo) return;
+    if (win === this.reader?._window && !this.tabSelected()) return;
+    const target = ((event as any).originalTarget ?? event.target) as Element | null;
+    const inCard = Boolean(target?.closest?.(".mem-card"));
+    if (!inCard && isEditable(target)) return;
+    const possible = redo ? this.history.canRedo : this.history.canUndo || this.hasPendingEdits();
+    if (!possible) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    void (redo ? this.redo() : this.undo());
+  }
+
+  private tabSelected(): boolean {
+    try {
+      const tabs = this.reader?._window?.Zotero_Tabs;
+      return !tabs || tabs.selectedID === this.reader.tabID;
+    } catch {
+      return false;
+    }
+  }
+
+  private hasPendingEdits(): boolean {
+    for (const card of this.cards.values()) if (card.hasPendingSave) return true;
+    return false;
+  }
+
+  private async flushCards(): Promise<void> {
+    await Promise.all([...this.cards.values()].map((card) => card.flush()));
+    this.recordChanges();
+  }
+
+  private queueHistory(task: () => Promise<void>): Promise<void> {
+    const run = this.historyTask.then(task).catch((error) => logError(error));
+    this.historyTask = run;
+    return run;
   }
 
   private attachmentID(): number | undefined {
@@ -250,168 +268,77 @@ export class ReaderSession {
     return Number.isFinite(id) && id > 0 ? id : undefined;
   }
 
-  private rememberSnapshot(key: string, itemID: number): void {
-    try {
-      const item = (Zotero as any).Items.get(itemID);
-      const snap = captureAnnotationSnapshot(item);
-      if (snap) this.snapshots.set(key, snap);
-    } catch {
-      // Item may already be gone.
-    }
-  }
-
-  private refreshSnapshots(notes: readonly MarginNote[]): void {
-    for (const note of notes) this.rememberSnapshot(note.key, note.itemID);
-  }
-
-  /** Creates are taken from the DB note list so a full snapshot always exists. */
-  private noteCreatedFromList(previousKeys: ReadonlySet<string>, attachmentID: number): void {
-    if (!this.trackAnnotationMutations) return;
-    for (const note of this.notes) {
-      if (previousKeys.has(note.key) || this.suppressPresence.has(note.key)) continue;
-      const snapshot = this.snapshots.get(note.key);
-      if (!snapshot) continue;
-      this.history.push({
-        kind: "annotation",
-        attachmentID,
-        key: note.key,
-        before: null,
-        after: structuredCloneSafe(snapshot),
-      });
-    }
-  }
-
-  /** Deletes are taken from reader keys so we still have a cached snapshot. */
-  private noteRemovedFromReader(
-    previousKeys: ReadonlySet<string> | undefined,
-    nextKeys: ReadonlySet<string> | undefined,
-  ): void {
-    if (this.history.isApplying || !this.trackAnnotationMutations || !previousKeys || !nextKeys) return;
+  /**
+   * Compares Zotero's current annotations with the last known state and records each change as
+   * one step. Deleting a highlight records it together with its comment, so undo restores both.
+   */
+  private recordChanges(): void {
+    if (this.destroyed) return;
     const attachmentID = this.attachmentID();
     if (!attachmentID) return;
-    for (const key of previousKeys) {
-      if (nextKeys.has(key) || this.suppressPresence.has(key)) continue;
-      const snapshot = this.snapshots.get(key);
-      if (!snapshot) continue;
-      this.history.push({
-        kind: "annotation",
-        attachmentID,
-        key,
-        before: structuredCloneSafe(snapshot),
-        after: null,
-      });
-      this.snapshots.delete(key);
-    }
-  }
-
-  private mutePresence(key: string): void {
-    const previous = this.suppressPresence.get(key);
-    if (previous) clearTimeout(previous);
-    this.suppressPresence.set(
-      key,
-      setTimeout(() => this.suppressPresence.delete(key), 1000),
-    );
-  }
-
-  private async applyHistory(entry: UndoEntry, toward: "before" | "after"): Promise<void> {
+    let attachment: any;
     try {
-      if (entry.kind === "comment") {
-        const value = toward === "before" ? entry.before : entry.after;
-        const item = annotationItem(entry.itemID, entry.key, this.attachmentID());
-        if (!item) return;
-        await this.store.saveComment(Number(item.id), value);
-        if (value.trim()) this.pinned.delete(entry.key);
-        const card = this.cards.get(entry.key);
-        if (card) card.forceComment(value, { persisted: true });
-        this.rememberSnapshot(entry.key, Number(item.id));
-        this.refresh();
-        return;
+      attachment = (Zotero as any).Items.get(attachmentID);
+    } catch {
+      return;
+    }
+    if (!attachment) return;
+    const current = readStates(attachment);
+    const previous = this.known;
+    this.known = current;
+    // While undo/redo writes to Zotero, the result is the new baseline, not a new step.
+    if (!previous || this.history.isApplying) return;
+    // Everything that changed between two reads came from one user action: one step.
+    const changes: AnnotationChange[] = [];
+    for (const [key, before] of previous) {
+      const after = current.get(key) ?? null;
+      if (after && sameState(before, after)) continue;
+      changes.push({ key, before, after });
+    }
+    for (const [key, after] of current) {
+      if (!previous.has(key)) changes.push({ key, before: null, after });
+    }
+    if (!changes.length) return;
+    const saving = this.savingGroup;
+    const only = changes.length === 1 ? changes[0]! : undefined;
+    const commentSave =
+      only && saving?.key === only.key && only.before && only.after && onlyCommentChanged(only.before, only.after);
+    this.history.record({
+      attachmentID,
+      changes,
+      group: commentSave ? saving!.group : undefined,
+      at: Date.now(),
+    });
+  }
+
+  /** Writes the states of one step back to Zotero. saveFromJSON updates by key, so nothing is duplicated. */
+  private async applyStates(entry: UndoEntry, direction: "undo" | "redo"): Promise<void> {
+    try {
+      const attachment = (Zotero as any).Items.get(entry.attachmentID);
+      if (!attachment) return;
+      const changes = direction === "undo" ? [...entry.changes].reverse() : entry.changes;
+      for (const change of changes) {
+        const target = direction === "undo" ? change.before : change.after;
+        try {
+          await this.applyState(attachment, change.key, target);
+        } catch (error) {
+          logError(error);
+        }
       }
-      if (entry.kind === "color") {
-        const value = toward === "before" ? entry.before : entry.after;
-        const item = annotationItem(entry.itemID, entry.key, this.attachmentID());
-        if (!item) return;
-        await this.store.saveColor(Number(item.id), value);
-        const card = this.cards.get(entry.key);
-        if (card) card.forceColor(value);
-        this.rememberSnapshot(entry.key, Number(item.id));
-        this.refresh();
-        return;
-      }
-      const target = toward === "before" ? entry.before : entry.after;
-      if (target) await this.ensureAnnotation(entry.attachmentID, entry.key, target);
-      else await this.removeAnnotation(entry.attachmentID, entry.key, entry.before ?? entry.after);
-    } catch (error) {
-      logError(error);
+    } finally {
+      this.refresh();
     }
   }
 
-  /**
-   * Brings an annotation back without duplicating. Prefer undelete / reuse the existing
-   * item when Zotero still has it (common right after a reader delete).
-   */
-  private async ensureAnnotation(attachmentID: number, key: string, snapshot: AnnotationSnapshot): Promise<void> {
-    const attachment = (Zotero as any).Items.get(attachmentID);
-    if (!attachment?.isPDFAttachment?.()) throw new Error("PDF attachment is missing");
-    this.mutePresence(key);
-    if (snapshot.key) this.mutePresence(String(snapshot.key));
-
-    const existing = findAnnotation(attachment, key, snapshot);
-    if (existing) {
-      if (existing.deleted) {
-        existing.deleted = false;
-      }
-      // Restore comment/color only — geometry already lives on the existing item.
-      if (typeof snapshot.comment === "string") existing.annotationComment = snapshot.comment;
-      if (typeof snapshot.color === "string") existing.annotationColor = snapshot.color;
-      await existing.saveTx();
-      this.rememberSnapshot(String(existing.key), Number(existing.id));
-      this.mutePresence(String(existing.key));
-      if (!String(snapshot.comment ?? "").trim() && String(snapshot.type ?? "") !== "note") {
-        this.pinned.add(String(existing.key));
-      }
-      this.refresh();
+  private async applyState(attachment: any, key: string, target: AnnotationState | null): Promise<void> {
+    const existing = (Zotero as any).Items.getByLibraryAndKey(attachment.libraryID, key) || undefined;
+    if (!target) {
+      if (existing) await existing.eraseTx();
       return;
     }
-
-    const payload: AnnotationSnapshot = {
-      ...snapshot,
-      key: String(snapshot.key ?? key),
-      isExternal: false,
-    };
-    const item = await (Zotero as any).Annotations.saveFromJSON(attachment, payload);
-    const liveKey = String(item?.key ?? payload.key ?? key);
-    const itemID = Number(item?.id ?? 0);
-    this.mutePresence(liveKey);
-    if (itemID) this.rememberSnapshot(liveKey, itemID);
-    if (!String(payload.comment ?? "").trim() && String(payload.type ?? "") !== "note") {
-      this.pinned.add(liveKey);
-    }
-    this.refresh();
-  }
-
-  private async removeAnnotation(
-    attachmentID: number,
-    key: string,
-    snapshot: AnnotationSnapshot | null,
-  ): Promise<void> {
-    this.mutePresence(key);
-    if (snapshot?.key) this.mutePresence(String(snapshot.key));
-    const attachment = (Zotero as any).Items.get(attachmentID);
-    const item = findAnnotation(attachment, key, snapshot);
-    if (!item) {
-      this.snapshots.delete(key);
-      this.pinned.delete(key);
-      this.refresh();
-      return;
-    }
-    const liveKey = String(item.key);
-    this.mutePresence(liveKey);
-    this.rememberSnapshot(liveKey, Number(item.id));
-    await item.eraseTx?.();
-    this.snapshots.delete(liveKey);
-    this.pinned.delete(liveKey);
-    this.refresh();
+    if (existing?.deleted) existing.deleted = false;
+    await (Zotero as any).Annotations.saveFromJSON(attachment, toAnnotationJson(target));
+    this.cards.get(key)?.forceComment(target.comment);
   }
 
   private paint(): void {
@@ -600,7 +527,6 @@ export class ReaderSession {
   private applyReaderVisibility(paint: boolean): void {
     this.nativeHidden = this.bridge.hiddenIDs();
     const keys = this.bridge.annotationKeys();
-    this.noteRemovedFromReader(this.readerKeys, keys);
     this.readerKeys = keys;
     if (keys) {
       for (const key of keys) this.seenInReader.add(key);
@@ -767,52 +693,9 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
-function structuredCloneSafe<T>(value: T): T {
-  try {
-    return structuredClone(value);
-  } catch {
-    return JSON.parse(JSON.stringify(value)) as T;
-  }
-}
-
-function findAnnotation(attachment: any, key: string, snapshot: AnnotationSnapshot | null | undefined): any | undefined {
-  const wantKey = String(snapshot?.key ?? key);
-  const wantId = Number((snapshot as any)?.id ?? 0);
-  try {
-    if (wantId > 0) {
-      const byId = (Zotero as any).Items.get(wantId);
-      if (byId?.isAnnotation?.()) return byId;
-    }
-  } catch {
-    // ignore
-  }
-  const list: any[] = attachment?.getAnnotations?.(false) ?? [];
-  const live = list.find((ann) => String(ann.key) === wantKey);
-  if (live) return live;
-  try {
-    const libraryID = attachment?.libraryID;
-    if (libraryID == null) return undefined;
-    const byKey = (Zotero as any).Items.getByLibraryAndKey(libraryID, wantKey);
-    if (byKey?.isAnnotation?.()) return byKey;
-  } catch {
-    // ignore
-  }
-  return undefined;
-}
-
-function annotationItem(itemID: number, key: string, attachmentID: number | undefined): any | undefined {
-  try {
-    const byId = (Zotero as any).Items.get(itemID);
-    if (byId?.isAnnotation?.() && !byId.deleted) return byId;
-  } catch {
-    // ignore
-  }
-  if (!attachmentID) return undefined;
-  try {
-    const attachment = (Zotero as any).Items.get(attachmentID);
-    return findAnnotation(attachment, key, { key });
-  } catch {
-    return undefined;
-  }
+function isEditable(element: Element | null): boolean {
+  if (!element) return false;
+  if ((element as HTMLElement).isContentEditable) return true;
+  return Boolean(element.closest?.('input, textarea, select, [contenteditable="true"], [contenteditable=""]'));
 }
 

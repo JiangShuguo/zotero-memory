@@ -1,42 +1,50 @@
-/** Per-reader-tab undo/redo. Cleared when the session is destroyed (leave PDF / quit Zotero). */
+/**
+ * Undo/redo for one open PDF tab. Every step is the before/after state of the annotations one
+ * user action touched, as stored in Zotero — deleting a highlight together with its comment is
+ * a single step. The history lives only as long as the reader session (closing the tab or
+ * Zotero clears it).
+ */
 
-export type AnnotationSnapshot = Record<string, unknown>;
+export interface AnnotationState {
+  key: string;
+  type: string;
+  text: string;
+  comment: string;
+  color: string;
+  pageLabel: string;
+  sortIndex: string;
+  /** Raw JSON string, compared as-is. */
+  position: string;
+  tags: string[];
+}
 
-export type UndoEntry =
-  | {
-      kind: "comment";
-      key: string;
-      itemID: number;
-      before: string;
-      after: string;
-      /** Last update time — used to coalesce one typing burst into a single step. */
-      at: number;
-    }
-  | {
-      kind: "color";
-      key: string;
-      itemID: number;
-      before: string;
-      after: string;
-    }
-  | {
-      /** Annotation appeared (create) or disappeared (delete). */
-      kind: "annotation";
-      attachmentID: number;
-      key: string;
-      /** State before the user action; null means it did not exist (create). */
-      before: AnnotationSnapshot | null;
-      /** State after the user action; null means it was removed (delete). */
-      after: AnnotationSnapshot | null;
-    };
+export interface AnnotationChange {
+  key: string;
+  /** null: the annotation did not exist before (a create). */
+  before: AnnotationState | null;
+  /** null: the annotation no longer exists afterwards (a delete). */
+  after: AnnotationState | null;
+}
+
+export interface UndoEntry {
+  attachmentID: number;
+  changes: AnnotationChange[];
+  /** Edit session from a margin card; comment saves in the same session form one step. */
+  group?: number;
+  at: number;
+}
 
 const MAX_DEPTH = 100;
-/** Merge comment edits on the same card while the user is still typing. */
-const COMMENT_COALESCE_MS = 1600;
+/** Comment saves from outside Memory (sidebar, popup) merge while they keep coming. */
+const LOOSE_MERGE_MS = 2000;
+/** Zotero may save a new annotation more than once right after creating it. */
+const CREATE_SETTLE_MS = 1500;
+
+export type ApplyStates = (entry: UndoEntry, direction: "undo" | "redo") => Promise<void>;
 
 export class UndoHistory {
-  private readonly undoStack: UndoEntry[] = [];
-  private readonly redoStack: UndoEntry[] = [];
+  private readonly done: UndoEntry[] = [];
+  private readonly undone: UndoEntry[] = [];
   private applying = 0;
 
   get isApplying(): boolean {
@@ -44,142 +52,103 @@ export class UndoHistory {
   }
 
   get canUndo(): boolean {
-    return this.undoStack.length > 0;
+    return this.done.length > 0;
   }
 
   get canRedo(): boolean {
-    return this.redoStack.length > 0;
+    return this.undone.length > 0;
   }
 
   clear(): void {
-    this.undoStack.length = 0;
-    this.redoStack.length = 0;
+    this.done.length = 0;
+    this.undone.length = 0;
   }
 
-  /** Records a change. Comment edits on the same key coalesce within a short typing window. */
-  push(entry: UndoEntry): void {
-    if (this.applying) return;
-    if (entry.kind === "comment" || entry.kind === "color") {
-      if (entry.before === entry.after) return;
-    }
-    if (entry.kind === "annotation" && entry.before === null && entry.after === null) return;
-
-    const last = this.undoStack[this.undoStack.length - 1];
-    const now = Date.now();
-
-    if (entry.kind === "comment") {
-      entry.at = now;
-      if (
-        last?.kind === "comment" &&
-        last.key === entry.key &&
-        last.itemID === entry.itemID &&
-        now - last.at <= COMMENT_COALESCE_MS
-      ) {
-        // Keep the original baseline; always take the latest text (tolerates IME gaps).
-        last.after = entry.after;
-        last.at = now;
-        if (last.before === last.after) this.undoStack.pop();
-        this.redoStack.length = 0;
-        return;
-      }
-    }
-
-    // Creating then immediately deleting (or the reverse) the same key cancels out.
-    if (entry.kind === "annotation" && last?.kind === "annotation" && last.key === entry.key) {
-      const mergedBefore = last.before;
-      const mergedAfter = entry.after;
-      this.undoStack.pop();
-      this.redoStack.length = 0;
-      if (snapshotKey(mergedBefore) === snapshotKey(mergedAfter) && sameSnapshot(mergedBefore, mergedAfter)) {
-        return;
-      }
-      if (mergedBefore !== null || mergedAfter !== null) {
-        this.undoStack.push({
-          kind: "annotation",
-          attachmentID: entry.attachmentID,
-          key: entry.key,
-          before: mergedBefore,
-          after: mergedAfter,
-        });
-        while (this.undoStack.length > MAX_DEPTH) this.undoStack.shift();
-      }
+  record(entry: UndoEntry): void {
+    if (this.applying || !entry.changes.length) return;
+    this.undone.length = 0;
+    const last = this.done[this.done.length - 1];
+    if (last && mergeable(last, entry)) {
+      const target = last.changes[0]!;
+      target.after = entry.changes[0]!.after;
+      last.at = entry.at;
+      if (target.before && target.after && sameState(target.before, target.after)) this.done.pop();
       return;
     }
-
-    this.undoStack.push(entry);
-    while (this.undoStack.length > MAX_DEPTH) this.undoStack.shift();
-    this.redoStack.length = 0;
+    this.done.push(entry);
+    if (this.done.length > MAX_DEPTH) this.done.splice(0, this.done.length - MAX_DEPTH);
   }
 
-  /**
-   * Drops trailing comment steps for a key that never reached Zotero (Esc cancel).
-   * Keeps the stack aligned with the last persisted comment.
-   */
-  discardCommentDrafts(key: string, persisted: string): void {
-    if (this.applying) return;
-    while (this.undoStack.length) {
-      const last = this.undoStack[this.undoStack.length - 1]!;
-      if (last.kind !== "comment" || last.key !== key) break;
-      if (last.after === persisted) break;
-      this.undoStack.pop();
-    }
-    this.redoStack.length = 0;
+  async undo(apply: ApplyStates): Promise<void> {
+    const entry = this.done.pop();
+    if (!entry) return;
+    await this.run(() => apply(entry, "undo"));
+    this.undone.push(entry);
   }
 
-  async undo(apply: (entry: UndoEntry, toward: "before" | "after") => Promise<void>): Promise<boolean> {
-    const entry = this.undoStack.pop();
-    if (!entry) return false;
+  async redo(apply: ApplyStates): Promise<void> {
+    const entry = this.undone.pop();
+    if (!entry) return;
+    await this.run(() => apply(entry, "redo"));
+    this.done.push(entry);
+  }
+
+  private async run(task: () => Promise<void>): Promise<void> {
     this.applying += 1;
     try {
-      await apply(entry, "before");
-      this.redoStack.push(entry);
+      await task();
     } finally {
       this.applying -= 1;
     }
-    return true;
-  }
-
-  async redo(apply: (entry: UndoEntry, toward: "before" | "after") => Promise<void>): Promise<boolean> {
-    const entry = this.redoStack.pop();
-    if (!entry) return false;
-    this.applying += 1;
-    try {
-      await apply(entry, "after");
-      this.undoStack.push(entry);
-    } finally {
-      this.applying -= 1;
-    }
-    return true;
   }
 }
 
-/** Best-effort sync snapshot for restoring a deleted annotation. */
-export function captureAnnotationSnapshot(item: any): AnnotationSnapshot | undefined {
-  if (!item?.isAnnotation?.()) return undefined;
-  const Annotations = (Zotero as any).Annotations;
-  try {
-    if (typeof Annotations?.toJSONSync === "function") {
-      const json = Annotations.toJSONSync(item);
-      if (json && typeof json === "object") return { ...json, key: String(item.key) };
-    }
-  } catch {
-    // Fall through to field copy.
+/** Only single-annotation edits merge: a comment typing session, or Zotero settling a new annotation. */
+function mergeable(last: UndoEntry, entry: UndoEntry): boolean {
+  if (last.attachmentID !== entry.attachmentID) return false;
+  if (last.changes.length !== 1 || entry.changes.length !== 1) return false;
+  const previous = last.changes[0]!;
+  const next = entry.changes[0]!;
+  if (previous.key !== next.key || !previous.after || !next.before || !next.after) return false;
+  const nextCommentOnly = onlyCommentChanged(next.before, next.after);
+  if (!previous.before) {
+    // Follow-up saves of a just-created annotation; a comment is always its own step.
+    return !nextCommentOnly && entry.at - last.at <= CREATE_SETTLE_MS;
   }
+  if (!nextCommentOnly || !onlyCommentChanged(previous.before, previous.after)) return false;
+  if (last.group !== undefined || entry.group !== undefined) return last.group === entry.group;
+  return entry.at - last.at <= LOOSE_MERGE_MS;
+}
+
+/** Current state of every annotation on the attachment that can be restored. */
+export function readStates(attachment: any): Map<string, AnnotationState> {
+  const states = new Map<string, AnnotationState>();
+  let items: any[] = [];
   try {
-    let position: unknown = item.annotationPosition;
-    if (typeof position === "string") {
-      try {
-        position = JSON.parse(position);
-      } catch {
-        return undefined;
-      }
+    items = attachment?.getAnnotations?.(false) ?? [];
+  } catch {
+    return states;
+  }
+  for (const item of items) {
+    const state = stateOf(item);
+    if (state) states.set(state.key, state);
+  }
+  return states;
+}
+
+function stateOf(item: any): AnnotationState | undefined {
+  try {
+    if (!item?.isAnnotation?.() || item.deleted || item.annotationIsExternal) return undefined;
+    const position = item.annotationPosition;
+    let tags: string[] = [];
+    try {
+      tags = (item.getTags?.() ?? [])
+        .map((tag: any) => String(tag?.tag ?? ""))
+        .filter(Boolean)
+        .sort();
+    } catch {
+      // Tags may not be loaded; they are not part of what Memory edits.
     }
-    const tags =
-      typeof item.getTags === "function"
-        ? (item.getTags() as Array<{ tag?: string; name?: string }>).map((tag) => ({
-            name: String(tag.tag ?? tag.name ?? ""),
-          }))
-        : undefined;
     return {
       key: String(item.key),
       type: String(item.annotationType ?? ""),
@@ -188,27 +157,52 @@ export function captureAnnotationSnapshot(item: any): AnnotationSnapshot | undef
       color: String(item.annotationColor ?? ""),
       pageLabel: String(item.annotationPageLabel ?? ""),
       sortIndex: String(item.annotationSortIndex ?? ""),
-      position,
-      tags: tags?.filter((tag) => tag.name),
-      isExternal: false,
+      position: typeof position === "string" ? position : JSON.stringify(position ?? {}),
+      tags,
     };
   } catch {
     return undefined;
   }
 }
 
-function snapshotKey(snap: AnnotationSnapshot | null): string | undefined {
-  if (!snap) return undefined;
-  const key = snap.key;
-  return key == null ? undefined : String(key);
+export function sameState(a: AnnotationState, b: AnnotationState): boolean {
+  return a.comment === b.comment && sameExceptComment(a, b);
 }
 
-function sameSnapshot(a: AnnotationSnapshot | null, b: AnnotationSnapshot | null): boolean {
-  if (a === b) return true;
-  if (!a || !b) return false;
+export function onlyCommentChanged(a: AnnotationState, b: AnnotationState): boolean {
+  return a.comment !== b.comment && sameExceptComment(a, b);
+}
+
+function sameExceptComment(a: AnnotationState, b: AnnotationState): boolean {
+  return (
+    a.type === b.type &&
+    a.text === b.text &&
+    a.color === b.color &&
+    a.pageLabel === b.pageLabel &&
+    a.sortIndex === b.sortIndex &&
+    a.position === b.position &&
+    a.tags.join("\u0000") === b.tags.join("\u0000")
+  );
+}
+
+/** JSON accepted by Zotero.Annotations.saveFromJSON, which creates or updates by key. */
+export function toAnnotationJson(state: AnnotationState): Record<string, unknown> {
+  let position: unknown = {};
   try {
-    return JSON.stringify(a) === JSON.stringify(b);
+    position = JSON.parse(state.position);
   } catch {
-    return false;
+    // Keep an empty position rather than failing the whole restore.
   }
+  return {
+    key: state.key,
+    type: state.type,
+    text: state.text,
+    comment: state.comment,
+    color: state.color,
+    pageLabel: state.pageLabel,
+    sortIndex: state.sortIndex,
+    position,
+    tags: state.tags.map((name) => ({ name })),
+    isExternal: false,
+  };
 }
